@@ -1,0 +1,22 @@
+# MiniLLM v2 — Dépendances
+#
+# Installation :
+#   pip install -r requirements.txt
+#
+# Pour CUDA (recommandé, remplace la ligne torch ci-dessous) :
+#   pip install torch --index-url https://download.pytorch.org/whl/cu121
+
+# ── Core ──────────────────────────────────────────────────────────────────────
+torch>=2.1.0          # Flash Attention via F.scaled_dot_product_attention (2.0+)
+                      # torch.compile requis (2.1+ recommandé)
+
+# ── Tokenizer ─────────────────────────────────────────────────────────────────
+tiktoken>=0.6.0       # Tokenizer BPE de OpenAI (cl100k_base = GPT-4)
+
+# ── Données ───────────────────────────────────────────────────────────────────
+numpy>=1.24.0         # Manipulation des fichiers .bin (memmap)
+
+# ── Optionnel mais recommandé ─────────────────────────────────────────────────
+# wandb               # Tracking des métriques d'entraînement (pip install wandb)
+# datasets            # HuggingFace datasets pour télécharger des corpus
+# sentencepiece       # Pour entraîner un tokenizer custom (Fulfulde + Français)
