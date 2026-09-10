@@ -129,3 +129,8 @@ class TrainConfig:
     dtype:   str  = "auto"      # "auto" → bfloat16 si cuda, sinon float32
     compile: bool = True        # torch.compile (désactiver si erreur ou Windows)
     seed:    int  = 42
+
+
+# ─── Ajout rolling checkpoint dans TrainConfig ────────────────────────────────
+# (ajouté après la définition de TrainConfig)
+TrainConfig.rolling_keep = 2   # nombre de ckpt_XXXXXX.pt gardés simultanément
