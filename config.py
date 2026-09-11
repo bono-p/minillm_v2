@@ -127,8 +127,10 @@ class TrainConfig:
     # ── Système ────────────────────────────────────────────────────────────
     device:  str  = "auto"      # "auto" → cuda si dispo, sinon mps, sinon cpu
     dtype:   str  = "auto"      # "auto" → bfloat16 si cuda, sinon float32
-    compile: bool = True        # torch.compile (désactiver si erreur ou Windows)
-    seed:    int  = 42
+    compile:    bool  = True        # torch.compile (désactiver si erreur ou Windows)
+    seed:        int   = 42
+    reset_iter:  bool  = False     # True = repart de iter=0 même si le checkpoint est à iter=N
+                                   # Obligatoire pour fine-tuning depuis un ckpt de pré-entraînement
 
 
 # ─── Ajout rolling checkpoint dans TrainConfig ────────────────────────────────
