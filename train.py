@@ -184,8 +184,12 @@ def train(cfg: TrainConfig):
         ckpt  = torch.load(cfg.resume_from, map_location=device, weights_only=False)
         state = {k.replace("_orig_mod.", ""): v for k, v in ckpt["model"].items()}
         model.load_state_dict(state)
-        iter_start = ckpt.get("iter", 0)
-        print(f"  Itération de reprise : {iter_start}")
+        raw_iter   = ckpt.get("iter", 0)
+        iter_start = 0 if getattr(cfg, 'reset_iter', False) else raw_iter
+        if getattr(cfg, 'reset_iter', False):
+            print(f"  Poids chargés depuis iter={raw_iter} → reset iter=0 (fine-tuning)")
+        else:
+            print(f"  Reprise depuis iter={iter_start}")
 
     # ── Compilation ─────────────────────────────────────────────────────────
     if cfg.compile and device == "cuda":
