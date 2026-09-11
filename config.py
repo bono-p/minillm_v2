@@ -21,7 +21,7 @@ class ModelConfig:
     """
 
     # ── Vocabulaire ────────────────────────────────────────────────────────
-    vocab_size: int = 50_257          # cl100k_base (GPT-4) ; adapter si tokenizer custom
+    vocab_size: int = 100_277         # cl100k_base réel : 100 277 tokens (pas 50 257)
 
     # ── Architecture ───────────────────────────────────────────────────────
     n_layers:   int   = 10            # nombre de blocs transformer
