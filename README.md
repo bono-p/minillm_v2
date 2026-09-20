@@ -1,4 +1,4 @@
-# 🧠 MiniLLM v2
+# 🧠 MiniLLM v2.1
 
 Un petit LLM **français** entraîné *from scratch* (Transformer décodeur : RMSNorm · RoPE · SwiGLU · GQA · QK-norm),
 pensé pour être entraîné sur **Kaggle / Colab (T4)** et même pilotable depuis un téléphone.
@@ -7,6 +7,27 @@ pensé pour être entraîné sur **Kaggle / Colab (T4)** et même pilotable depu
 > plausible, et — après le fine-tuning — à **répondre en phrases complètes à des questions simples** (identité,
 > salutations, capitales, calendrier, contraires, petites opérations…) et à dire « je ne sais pas » quand il ne peut pas
 > savoir. Ce n'est pas un assistant généraliste : hors de ce qu'il a vu, il inventera. C'est normal pour un modèle de cette taille.
+
+---
+
+## Nouveautés de la v2.1 (branche `v2.1`)
+
+Aucun changement d'architecture : le code v2.1 **relit les checkpoints et les données de la v2**. Un run neuf en v2.1 repart de zéro
+pour profiter du corpus mieux nettoyé.
+
+| nouveauté | détail |
+|---|---|
+| **Notebook Kaggle** (`MiniLLM_v2_Kaggle.ipynb`) | T4 ×2, phases (`data` / `pretrain` / `sft` / `chat`), reprise automatique depuis `/kaggle/input` ou **Google Drive via liens de partage** (`gdown`, une seule fois), vérification des fichiers, arrêt propre à `MAX_MINUTES` |
+| **Garde-fou tokenizer** | empreinte du tokenizer dans `meta.json` et les checkpoints : reprendre/affiner avec un tokenizer reconstruit (même taille, autre contenu) est **refusé** au lieu de corrompre le modèle en silence |
+| **Nettoyage renforcé** | trous du type « (en latin : ) », élisions espacées (« L' archidiocèse »), filtre anti-spam web ; `prepare_data.py tokenize --refilter` re-nettoie un corpus existant sans re-télécharger |
+| **Mini-RAG** (`rag.py`, `knowledge/`) | le modèle répond *à partir d'un texte* retrouvé dans ta base (BM25 unigrammes+bigrammes) au même format que PIAF du SFT ; expérimental |
+| **`evaluate.py persona`** | vérifie que le modèle a appris `personnalite.jsonl` |
+| **Logs** | ETA et mémoire GPU à chaque ligne (`ETA 5.1 h | 8.3 Go GPU`) |
+| **SFT** | PIAF : tout le jeu (~3 800 exemples) par défaut |
+| **Reprise multi-GPU** | un run commencé sur 1 GPU (Colab) peut être repris sur 2 GPU (Kaggle) : flux de données identique (testé) |
+
+**Kaggle en bref** : Settings → GPU T4 ×2 + Internet On → colle tes liens Drive (une fois) → *Save Version (Save & Run All)* → session suivante :
+*Add Input → Notebook Output Files → ce notebook* → le code reprend seul.
 
 ---
 
@@ -68,6 +89,8 @@ faisaient 49M / 83M / 162M / 381M / 1 091M : les embeddings pesaient 62 % du plu
 | `prepare_data.py` | corpus → tokenizer → `train.bin` / `val.bin` (split **par document**, `<|endoftext|>` entre documents) |
 | `synthetic_qa.py` | ~2 000 Q/R propres générées par code (faits sûrs, arithmétique calculée) |
 | `personnalite.jsonl` | **≤ 30 Q/R sur le modèle lui-même** (nom, créateur, caractère) — à éditer librement |
+| `rag.py` · `knowledge/` | mini-RAG (BM25) : réponses à partir de ta base de textes (expérimental) |
+| `kaggle_utils.py` · `MiniLLM_v2_Kaggle.ipynb` | Kaggle : récupération données/checkpoints (Dataset, sortie de notebook, Drive/gdown), vérifications, élagage |
 | `sft_data.py` | jeu SFT : synthétique + French-Alpaca + OpenAssistant FR + PIAF + personnalité ; masque de loss ; filtre d'identité |
 | `data.py` | loaders **déterministes** : val fixe, époques sans remise, SFT groupé par longueur |
 | `checkpoint.py` | sauvegardes atomiques, `best`/`final`/reprise, nettoyage numérique |
@@ -126,7 +149,7 @@ répétés **appliquées au texte généré uniquement** (pas de blocage quand o
 ## Tests
 
 ```bash
-python -m pytest -q          # 31 tests, CPU, ~1 min : KV-cache = forward complet, nombre de paramètres exact, masque de loss,
+python -m pytest -q          # 39 tests, CPU, ~1 min : KV-cache = forward complet, nombre de paramètres exact, masque de loss,
                              # nettoyage, tokenizer, loaders, reprise exacte, best jamais écrasé, DDP 2 processus…
 python smoke_test.py         # pipeline complet sur un mini modèle
 ```

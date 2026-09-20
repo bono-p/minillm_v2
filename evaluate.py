@@ -11,6 +11,7 @@ Exemples :
   python evaluate.py perplexity --ckpt checkpoints/pretrain/best.pt --data_dir data/pretrain
   python evaluate.py qa --ckpt checkpoints/sft/best.pt --sft_dir data/sft --n 300
   python evaluate.py demo --ckpt checkpoints/sft/best.pt
+  python evaluate.py persona --ckpt checkpoints/sft/best.pt      # a-t-il appris personnalite.jsonl ?
 """
 from __future__ import annotations
 
@@ -110,6 +111,27 @@ def qa_eval(ckpt: str, sft_dir: str, n: int = 200, max_new: int = 64, device: st
     return res
 
 
+@torch.inference_mode()
+def persona_check(ckpt: str, persona_path: str = None, device: str = "auto", show: int = 10) -> Dict:
+    """Le modèle a-t-il bien appris sa personnalité ? Génère (greedy) la réponse à chaque question de personnalite.jsonl
+    et la compare à la réponse attendue (F1 normalisé). ~1.0 = appris par cœur ; les paraphrases se testent avec `demo`."""
+    persona_path = persona_path or os.path.join(os.path.dirname(os.path.abspath(__file__)), "personnalite.jsonl")
+    model, tok, _ = load_model(ckpt, device=device)
+    rows = [json.loads(l) for l in open(persona_path, encoding="utf-8") if l.strip()]
+    f1s, exact = [], 0
+    for i, r in enumerate(rows):
+        pred = chat_reply(model, tok, [{"role": "user", "content": r["question"]}], max_new_tokens=80,
+                          temperature=0.0, repetition_penalty=1.0)
+        f = f1_score(pred, r["answer"])
+        f1s.append(f)
+        exact += normalize(pred) == normalize(r["answer"])
+        if i < show or f < 0.5:
+            print(f"{'✓' if f >= 0.8 else '✗'} {r['question']}\n    attendu : {r['answer'][:100]}\n    obtenu  : {pred[:100]}")
+    res = {"n": len(rows), "f1_moyen": round(sum(f1s) / max(1, len(f1s)), 4), "exact_match": round(exact / max(1, len(rows)), 4)}
+    print("\n" + json.dumps(res, indent=2))
+    return res
+
+
 def demo(ckpt: str, device: str = "auto", prompts: List[str] = None) -> None:
     model, tok, _ = load_model(ckpt, device=device)
     for q in prompts or DEMO_PROMPTS:
@@ -120,7 +142,8 @@ def demo(ckpt: str, device: str = "auto", prompts: List[str] = None) -> None:
 
 def main():
     p = argparse.ArgumentParser(description="MiniLLM v2 — évaluation")
-    p.add_argument("what", choices=["perplexity", "qa", "demo"])
+    p.add_argument("what", choices=["perplexity", "qa", "demo", "persona"])
+    p.add_argument("--persona", default=None, help="fichier de personnalité (défaut : personnalite.jsonl)")
     p.add_argument("--ckpt", required=True)
     p.add_argument("--data_dir", default="data/pretrain")
     p.add_argument("--sft_dir", default="data/sft")
@@ -132,6 +155,8 @@ def main():
         perplexity(a.ckpt, a.data_dir, a.seq_len, device=a.device)
     elif a.what == "qa":
         qa_eval(a.ckpt, a.sft_dir, a.n, device=a.device)
+    elif a.what == "persona":
+        persona_check(a.ckpt, a.persona, device=a.device)
     else:
         demo(a.ckpt, a.device)
 

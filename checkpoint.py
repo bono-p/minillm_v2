@@ -57,7 +57,7 @@ def _cpu_state_dict(model) -> dict:
 
 
 # ── écriture ────────────────────────────────────────────────────────────────
-def save_full(out_dir, it, model, optimizer, scaler, model_cfg, train_cfg, best_val_loss, no_improve, tokens_seen):
+def save_full(out_dir, it, model, optimizer, scaler, model_cfg, train_cfg, best_val_loss, no_improve, tokens_seen, extra=None):
     path = os.path.join(out_dir, f"ckpt_{it:07d}.pt")
     atomic_save({
         "format": FORMAT_VERSION,
@@ -70,11 +70,12 @@ def save_full(out_dir, it, model, optimizer, scaler, model_cfg, train_cfg, best_
         "best_val_loss": float(best_val_loss),
         "no_improve": int(no_improve),
         "tokens_seen": int(tokens_seen),
+        **(extra or {}),
     }, path)
     return path
 
 
-def save_best(out_dir, it, model, model_cfg, train_cfg, val_loss, tokens_seen):
+def save_best(out_dir, it, model, model_cfg, train_cfg, val_loss, tokens_seen, extra=None):
     path = os.path.join(out_dir, "best.pt")
     atomic_save({
         "format": FORMAT_VERSION,
@@ -84,12 +85,13 @@ def save_best(out_dir, it, model, model_cfg, train_cfg, val_loss, tokens_seen):
         "iter": int(it),
         "val_loss": float(val_loss),
         "tokens_seen": int(tokens_seen),
+        **(extra or {}),
     }, path)
     atomic_write_text(json.dumps({"val_loss": float(val_loss), "iter": int(it)}), os.path.join(out_dir, "best.json"))
     return path
 
 
-def save_final(out_dir, it, model, model_cfg, train_cfg, val_loss, tokens_seen):
+def save_final(out_dir, it, model, model_cfg, train_cfg, val_loss, tokens_seen, extra=None):
     path = os.path.join(out_dir, "final.pt")
     atomic_save({
         "format": FORMAT_VERSION,
@@ -99,6 +101,7 @@ def save_final(out_dir, it, model, model_cfg, train_cfg, val_loss, tokens_seen):
         "iter": int(it),
         "val_loss": None if val_loss is None else float(val_loss),
         "tokens_seen": int(tokens_seen),
+        **(extra or {}),
     }, path)
     return path
 

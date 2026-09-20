@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 
+import numpy as np
 import pytest
 import torch
 
@@ -285,7 +286,7 @@ def test_vocab_mismatch_is_rejected(tok_and_data, tmp_path):
     sft_data.build_sft(tok_b, sft_dir, alpaca=0, piaf=0, oasst=0, synthetic_repeat=1, max_len=100)
     cfg = TrainConfig.for_mode("sft")
     cfg.data_dir, cfg.out_dir, cfg.init_from, cfg.epochs, cfg.device = sft_dir, str(tmp_path / "x"), os.path.join(out, "best.pt"), 1, "cpu"
-    with pytest.raises(ValueError, match="Vocabulaire incompatible"):
+    with pytest.raises(ValueError, match="incompatible"):
         train.train(cfg)
 
 
@@ -416,3 +417,172 @@ def test_push_script_includes_the_persona_file():
     files = pg.collect_files(ROOT)
     assert "personnalite.jsonl" in files and "MiniLLM_v2.ipynb" in files and "tests/test_all.py" in files
     assert not any(f.startswith(("data/", "checkpoints/")) for f in files)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  v2.1 : nettoyage renforcé, RAG, outils Kaggle, continuité multi-GPU, ETA, persona
+# ══════════════════════════════════════════════════════════════════════════════
+def test_v21_cleaning_catches_empty_parentheses_and_fixes_elisions():
+    from text_cleaning import has_defect, normalize_elisions, clean_web_text, spam_score
+    for bad in ["L'archidiocèse de Lecce (en latin : ) est un archidiocèse.", "Il est né (le , à Paris).", "Il est né (le ) à Rome.",
+                "Le club (fondé en ; dissous en ) existe.", "Il dit « » et partit."]:
+        assert has_defect(bad), bad
+    for ok in ["L'archidiocèse de Lecce (en latin : Archidioecesis Lupiensis) est un archidiocèse.", "Jean (1902-1980) est un écrivain.",
+               "Le prix est de 3,5 euros ; il augmente."]:
+        assert not has_defect(ok), ok
+    assert normalize_elisions("L' archidiocèse et d' Italie, aujourd' hui, qu' il vienne") == "L'archidiocèse et d'Italie, aujourd'hui, qu'il vienne"
+    assert normalize_elisions("Il a dit 'bonjour' à l'école.") == "Il a dit 'bonjour' à l'école."
+    spam = "Cliquez ici pour notre boutique en ligne, livraison gratuite, abonnez-vous à la newsletter. " * 4
+    assert spam_score(spam) >= 3 and clean_web_text(spam) is None
+    assert clean_web_text("Le fleuve Bénoué traverse Garoua avant de rejoindre le Niger, au cœur de la région. " * 8) is not None
+
+
+def test_refilter_reprocesses_an_existing_corpus_without_downloading(tmp_path):
+    import prepare_data
+    from mini_tokenizer import train_tokenizer
+    data = tmp_path / "data"
+    (data / "corpus").mkdir(parents=True)
+    good = "Le fleuve Bénoué traverse la ville de Garoua avant de rejoindre le Niger, et les habitants y pêchent depuis toujours. " * 4
+    holey = "L' archidiocèse de Lecce (en latin : ) est un archidiocèse métropolitain de l' Église catholique. "
+    docs = [{"text": (good + holey + good).strip(), "src": "wiki"} for _ in range(30)]
+    docs += [{"text": "Cliquez ici boutique en ligne livraison gratuite newsletter " * 20, "src": "web"} for _ in range(5)]
+    with open(data / "corpus" / "corpus.jsonl", "w", encoding="utf-8") as f:
+        for d in docs:
+            f.write(json.dumps(d, ensure_ascii=False) + "\n")
+    train_tokenizer([d["text"] for d in docs], vocab_size=400, save_path=str(data / "tokenizer.json"), show_progress=False)
+    meta = prepare_data.tokenize_corpus(str(data), val_permille=200, refilter=True)
+    assert meta["refiltered"] and meta["n_train_docs"] + meta["n_val_docs"] == 30       # les 5 docs spam ont disparu
+    from mini_tokenizer import MiniTokenizer
+    tok = MiniTokenizer(str(data / "tokenizer.json"))
+    text = tok.decode(np.fromfile(str(data / "pretrain" / "train.bin"), dtype=meta["dtype"]).tolist())
+    assert "(en latin : )" not in text and "L' archidiocèse" not in text and "Bénoué" in text
+
+
+
+def test_rag_retrieval_and_prompt_budget(tok_and_data, tmp_path):
+    from rag import BM25Index, load_knowledge, build_rag_messages, rag_answer, RAG_INSTRUCTION
+    kb = load_knowledge(os.path.join(ROOT, "knowledge"))
+    assert len(kb) >= 5
+    idx = BM25Index(kb)
+    cases = {"Quelle est la capitale du Cameroun ?": "Yaoundé", "Sur quel fleuve est construite Garoua ?": "Bénoué",
+             "Qui a créé MiniLLM ?": "DevLab", "Quelle est la monnaie du Cameroun ?": "CFA"}
+    for q, expected in cases.items():
+        hit = idx.search(q, 1)
+        assert hit and expected in kb[hit[0][1]], q
+    assert idx.search("Quelle est la recette du ndolé ?", 1) == []                     # rien de pertinent -> pas de passage
+    msg = build_rag_messages("Où est Garoua ?", "Phrase numéro un. " * 200, max_chars=300)[0]["content"]
+    assert msg.startswith(RAG_INSTRUCTION) and len(msg) < 500
+    # de bout en bout avec un modèle minuscule : le prompt doit toujours tenir dans la fenêtre
+    import train, generate
+    _, data = tok_and_data
+    out = str(tmp_path / "o")
+    train.train(_tiny_cfg(data, out, max_iters=5))
+    model, tok, _ = generate.load_model(os.path.join(out, "best.pt"), device="cpu")
+    ans, passage = rag_answer(model, tok, idx, "Quelle est la capitale du Cameroun ?", max_new_tokens=20, temperature=0.0)
+    assert isinstance(ans, str) and passage is not None and "Yaoundé" in passage
+    ans2, passage2 = rag_answer(model, tok, idx, "Quelle est la recette du ndolé ?", max_new_tokens=20, temperature=0.0)
+    assert passage2 is None
+
+
+def test_kaggle_utils_restore_verify_and_drive(tok_and_data, tmp_path, monkeypatch):
+    import kaggle_utils as ku
+    _, data = tok_and_data
+    # faux /kaggle/input : un dataset (données) + la sortie d'un notebook précédent (checkpoints)
+    inp = tmp_path / "input"
+    (inp / "ds" / "data").mkdir(parents=True)
+    import shutil
+    shutil.copytree(os.path.join(data, "pretrain"), inp / "ds" / "data" / "pretrain")
+    shutil.copy(os.path.join(data, "tokenizer.json"), inp / "ds" / "data" / "tokenizer.json")
+    import train
+    out = str(tmp_path / "prev" / "checkpoints" / "pretrain")
+    train.train(_tiny_cfg(data, out, max_iters=10, save_every=5))
+    shutil.copytree(tmp_path / "prev", inp / "nb_prev")
+    work = str(tmp_path / "work")
+    found = ku.restore_from_inputs(str(inp), work)
+    assert {"pretrain_data", "tokenizer", "ckpt_pretrain"} <= set(found)
+    meta = ku.verify_pretrain_data(os.path.join(work, "data", "pretrain"))
+    assert meta["n_train_tokens"] > 0
+    ck = ku.verify_checkpoint(os.path.join(work, "checkpoints", "pretrain", "best.pt"))
+    assert ck["iter"] is not None
+    from checkpoint import list_checkpoints
+    assert list_checkpoints(os.path.join(work, "checkpoints", "pretrain"))[-1][0] == 10        # le plus récent seulement
+    # 2e appel : idempotent (rien n'est recopié)
+    assert ku.restore_from_inputs(str(inp), work) == {}
+    # un .bin tronqué est détecté
+    with open(os.path.join(work, "data", "pretrain", "train.bin"), "r+b") as f:
+        f.truncate(1000)
+    with pytest.raises(ValueError, match="tronqué"):
+        ku.verify_pretrain_data(os.path.join(work, "data", "pretrain"))
+    # Drive : id reconnu, téléchargement simulé, entrées vides / déjà présentes ignorées
+    assert ku.extract_drive_id("https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQrStUvWxYz/view?usp=sharing") == "1AbCdEfGhIjKlMnOpQrStUvWxYz"
+    import types
+    calls = []
+
+    def fake_download(url, dst, quiet=False, fuzzy=True):
+        calls.append(url)
+        open(dst, "wb").write(b"abc")
+        return dst
+    monkeypatch.setitem(sys.modules, "gdown", types.SimpleNamespace(download=fake_download))
+    link = "https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQrStUvWxYz/view"
+    done = ku.download_drive({"data/x.bin": link, "data/skip.bin": "", "data/pretrain/meta.json": link}, work)
+    assert done == ["data/x.bin"] and len(calls) == 1 and os.path.exists(os.path.join(work, "data", "x.bin"))
+    with pytest.raises(ValueError, match="non reconnu"):
+        ku.download_drive({"data/y.bin": "https://example.com/pas-un-lien"}, work)
+
+
+def test_resume_stream_is_identical_across_gpu_counts(tok_and_data):
+    """1 GPU (accum 8) et 2 GPU (accum 4) lisent EXACTEMENT les mêmes séquences à chaque itération -> on peut reprendre un run Colab (1 GPU) sur Kaggle (2 GPU)."""
+    from data import PretrainData
+    _, data = tok_and_data
+    d1 = PretrainData(os.path.join(data, "pretrain"), 32, 2, seed=11, rank=0, world=1)
+    d2 = [PretrainData(os.path.join(data, "pretrain"), 32, 2, seed=11, rank=r, world=2) for r in range(2)]
+    for it in (0, 3, 7):
+        a = {tuple(row.tolist()) for k in range(8) for row in d1.get_batch(it * 8 + k)[0]}
+        b = {tuple(row.tolist()) for r in range(2) for k in range(4) for row in d2[r].get_batch(it * 4 + k)[0]}
+        assert a == b and len(a) == 16
+
+
+def test_eta_and_memory_are_logged_and_persona_check_runs(tok_and_data, tmp_path):
+    import train, evaluate
+    _, data = tok_and_data
+    out = str(tmp_path / "o")
+    train.train(_tiny_cfg(data, out, max_iters=10))
+    rows = [json.loads(l) for l in open(os.path.join(out, "log.jsonl")) if '"train"' in l]
+    assert rows and all("eta_h" in r and "mem_gb" in r for r in rows)
+    persona = tmp_path / "p.jsonl"
+    persona.write_text('{"question": "Comment tu t\'appelles ?", "answer": "Je suis MiniLLM."}\n'
+                       '{"question": "Qui t\'a créé ?", "answer": "J\'ai été créé par DevLab."}\n', encoding="utf-8")
+    res = evaluate.persona_check(os.path.join(out, "best.pt"), str(persona), device="cpu", show=2)
+    assert res["n"] == 2 and 0.0 <= res["f1_moyen"] <= 1.0
+
+
+def test_tokenizer_fingerprint_blocks_mismatched_resume(tok_and_data, tmp_path):
+    """Un checkpoint entraîné avec un tokenizer ne doit JAMAIS être repris avec des données d'un autre tokenizer (même taille de vocab = piège silencieux)."""
+    import shutil, train
+    _, data = tok_and_data
+    d2 = str(tmp_path / "data2")
+    shutil.copytree(os.path.join(data, "pretrain"), os.path.join(d2, "pretrain"))
+    out = str(tmp_path / "o")
+    train.train(_tiny_cfg(data, out, max_iters=5))
+    ck = torch.load(os.path.join(out, "best.pt"), weights_only=True)
+    assert ck.get("tokenizer_sha")
+    meta_path = os.path.join(d2, "pretrain", "meta.json")
+    meta = json.load(open(meta_path))
+    meta["tokenizer_sha"] = "0000000000000000"
+    json.dump(meta, open(meta_path, "w"))
+    with pytest.raises(ValueError, match="Tokenizer incompatible"):
+        train.train(_tiny_cfg(d2, out, max_iters=10))                        # reprise avec un autre tokenizer -> refusée
+
+
+def test_v2_checkpoints_without_fingerprint_still_resume(tok_and_data, tmp_path):
+    """Compat v2 : un checkpoint sans tokenizer_sha (ancien) doit se reprendre normalement avec des données qui en ont un."""
+    import train
+    from checkpoint import latest_checkpoint
+    _, data = tok_and_data
+    out = str(tmp_path / "o")
+    train.train(_tiny_cfg(data, out, max_iters=5))
+    path = latest_checkpoint(out)
+    ck = torch.load(path, weights_only=True)
+    ck.pop("tokenizer_sha", None)
+    torch.save(ck, path)
+    assert train.train(_tiny_cfg(data, out, max_iters=10))["iter"] == 10

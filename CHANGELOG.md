@@ -1,5 +1,17 @@
 # Changelog — MiniLLM v2 (refonte après audit)
 
+## v2.1 (branche `v2.1`)
+
+* **Kaggle** : `MiniLLM_v2_Kaggle.ipynb` + `kaggle_utils.py` (restauration depuis `/kaggle/input`, Google Drive via `gdown`, vérification des tailles de `.bin` et du checkpoint, élagage de la sortie).
+* **Garde-fou tokenizer** : `tokenizer_sha` dans `meta.json` (pré-entraînement et SFT) et dans les checkpoints ; reprise/`init_from` refusés si les empreintes diffèrent.
+* **Nettoyage** : motifs `(en latin : )`, `(le )`, guillemets vides ; recollage des élisions (`L' archidiocèse` → `L'archidiocèse`) ; filtre anti-spam web (≥ 3 termes de boilerplate) ; `prepare_data.py tokenize --refilter`.
+* **Mini-RAG** : `rag.py` (BM25 unigrammes + bigrammes, passage centré sur la question, prompt au format PIAF, tient dans la fenêtre du modèle) + `knowledge/exemple.txt`.
+* **Évaluation** : `evaluate.py persona`.
+* **Logs** : ETA et mémoire GPU (`log.jsonl` inclus).
+* **SFT** : PIAF complet par défaut (4 000 max).
+* **Tests** : 39 (continuité du flux de données entre 1 et 2 GPU, RAG, outils Kaggle, garde-fou tokenizer, refilter de bout en bout…).
+* Compatibilité : aucun changement d'architecture ni de format de checkpoint (champ optionnel `tokenizer_sha`) : les checkpoints et données v2 restent utilisables.
+
 Chaque ligne relie un problème constaté à l'audit à sa correction et au fichier concerné.
 
 ## Sauvegarde du « meilleur » modèle

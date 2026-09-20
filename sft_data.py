@@ -13,7 +13,7 @@ Chaque source externe est protégée par try/except : si un dataset HF change de
 et on continue avec les autres.
 
 Exemple :
-  python sft_data.py --tokenizer data/tokenizer.json --out data/sft --alpaca 30000 --piaf 2000 --oasst 3000
+  python sft_data.py --tokenizer data/tokenizer.json --out data/sft --alpaca 30000 --piaf 4000 --oasst 3000
 
 Personnalité : `personnalite.jsonl` (≤ 30 Q/R sur le modèle lui-même) est ajouté automatiquement, toujours en train,
 répété --persona_repeat fois. Modifie ce fichier puis reconstruis le SFT (supprime data/sft) et ré-entraîne.
@@ -177,7 +177,7 @@ def _safe(name: str, fn, *args, **kwargs) -> List[Conv]:
         return []
 
 
-def build_sft(tokenizer_path: str, out_dir: str, alpaca: int = 30_000, piaf: int = 2_000, oasst: int = 3_000,
+def build_sft(tokenizer_path: str, out_dir: str, alpaca: int = 30_000, piaf: int = 4_000, oasst: int = 3_000,
               synthetic_repeat: int = 2, extra_jsonl: Optional[List[str]] = None, max_len: int = 512,
               val_permille: int = 20, seed: int = 0, persona: Optional[str] = None, persona_repeat: int = 20) -> dict:
     tok = MiniTokenizer(tokenizer_path)
@@ -237,7 +237,7 @@ def build_sft(tokenizer_path: str, out_dir: str, alpaca: int = 30_000, piaf: int
     meta = {
         "vocab_size": tok.vocab_size, "padded_vocab_size": tok.padded_vocab_size, "pad_id": tok.pad_id,
         "max_len": max_len, "dtype": np.dtype(dtype).name, "train": stats["train"], "val": stats["val"],
-        "sources": per_source, "skipped_too_long": n_too_long,
+        "sources": per_source, "skipped_too_long": n_too_long, "tokenizer_sha": tok.sha,
     }
     save_meta(os.path.join(out_dir, "meta.json"), meta)
     print(f"\nSFT : train={tr['n_examples']:,} ex. / {tr['n_tokens']:,} tokens | val={stats['val']['n_examples']:,} ex. "
@@ -254,7 +254,7 @@ def main():
     p.add_argument("--tokenizer", default="data/tokenizer.json")
     p.add_argument("--out", default="data/sft")
     p.add_argument("--alpaca", type=int, default=30_000)
-    p.add_argument("--piaf", type=int, default=2_000)
+    p.add_argument("--piaf", type=int, default=4_000, help="exemples PIAF (le jeu en contient ~3 800 : tous par défaut)")
     p.add_argument("--oasst", type=int, default=3_000)
     p.add_argument("--synthetic_repeat", type=int, default=2)
     p.add_argument("--extra_jsonl", nargs="*", default=None)

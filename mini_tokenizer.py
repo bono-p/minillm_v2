@@ -12,6 +12,7 @@ Format de chat (loss uniquement sur la réponse de l'assistant) :
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from typing import Iterable, List, Sequence, Tuple
@@ -67,6 +68,8 @@ class MiniTokenizer:
         if None in (self.eot_id, self.system_id, self.user_id, self.assistant_id, self.end_id):
             raise ValueError(f"{path} ne contient pas les tokens spéciaux attendus {SPECIAL_TOKENS}")
         self.pad_id = self.eot_id
+        with open(path, "rb") as f:
+            self.sha = hashlib.sha256(f.read()).hexdigest()[:16]     # empreinte : détecte un tokenizer reconstruit ≠ celui du checkpoint
 
     @property
     def vocab_size(self) -> int:

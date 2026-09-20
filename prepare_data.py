@@ -29,7 +29,7 @@ from typing import Iterable, Iterator, List, Optional
 import numpy as np
 
 from mini_tokenizer import MiniTokenizer, save_meta, train_tokenizer
-from text_cleaning import clean_web_text, clean_wikipedia_text
+from text_cleaning import clean_web_text, clean_wikipedia_text, refilter_doc
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -134,6 +134,13 @@ def _iter_jsonl(path: str, stride: int = 1) -> Iterator[str]:
                 yield json.loads(line)["text"]
 
 
+def _iter_jsonl_docs(path: str) -> Iterator[tuple]:
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            row = json.loads(line)
+            yield row["text"], row.get("src", "")
+
+
 def build_tokenizer(out: str, vocab_size: int = 32_000, max_mb: int = 300) -> MiniTokenizer:
     corpus = os.path.join(out, "corpus", "corpus.jsonl")
     size = os.path.getsize(corpus)
@@ -144,7 +151,8 @@ def build_tokenizer(out: str, vocab_size: int = 32_000, max_mb: int = 300) -> Mi
     return tok
 
 
-def tokenize_corpus(out: str, val_permille: int = 10, max_tokens: int = 0, batch_docs: int = 2000) -> dict:
+def tokenize_corpus(out: str, val_permille: int = 10, max_tokens: int = 0, batch_docs: int = 2000,
+                    refilter: bool = False) -> dict:
     tok = MiniTokenizer(os.path.join(out, "tokenizer.json"))
     dtype = np.uint16 if tok.padded_vocab_size <= 65_535 else np.uint32
     pre_dir = os.path.join(out, "pretrain")
@@ -166,9 +174,18 @@ def tokenize_corpus(out: str, val_permille: int = 10, max_tokens: int = 0, batch
             docs[split] += 1
             total_chars += len(text)
 
+    n_in = n_kept = chars_in = chars_kept = 0
     try:
         batch: List[str] = []
-        for text in _iter_jsonl(corpus):
+        for text, src in _iter_jsonl_docs(corpus):
+            if refilter:                                   # re-nettoyage avec les règles actuelles, sans retélécharger
+                n_in += 1
+                chars_in += len(text)
+                text = refilter_doc(text, src)
+                if not text:
+                    continue
+                n_kept += 1
+                chars_kept += len(text)
             batch.append(text)
             if len(batch) >= batch_docs:
                 flush(batch)
@@ -187,8 +204,11 @@ def tokenize_corpus(out: str, val_permille: int = 10, max_tokens: int = 0, batch
         "eot_id": tok.eot_id, "n_train_tokens": counts["train"], "n_val_tokens": counts["val"],
         "n_train_docs": docs["train"], "n_val_docs": docs["val"],
         "chars_per_token": round(total_chars / max(1, counts["train"] + counts["val"]), 3),
-        "tokenizer": "tokenizer.json",
+        "tokenizer": "tokenizer.json", "tokenizer_sha": tok.sha,
     }
+    if refilter:
+        meta["refiltered"] = True
+        print(f"Re-nettoyage : {n_kept:,}/{n_in:,} documents gardés, {(1 - chars_kept / max(1, chars_in)) * 100:.1f} % des caractères retirés")
     save_meta(os.path.join(pre_dir, "meta.json"), meta)
     print(f"\nTokens : train={counts['train']:,} ({docs['train']:,} docs) | val={counts['val']:,} ({docs['val']:,} docs) "
           f"| {meta['chars_per_token']} caractères/token")
@@ -212,6 +232,8 @@ def main():
     p.add_argument("--tok_mb", type=int, default=300, help="Mo de texte max pour entraîner le tokenizer")
     p.add_argument("--val_permille", type=int, default=10, help="‰ de documents envoyés en validation")
     p.add_argument("--max_tokens", type=int, default=0)
+    p.add_argument("--refilter", action="store_true",
+                   help="tokenize : ré-applique le nettoyage actuel à corpus.jsonl (sans retélécharger) ; le tokenizer existant est conservé")
     p.add_argument("--seed", type=int, default=42)
     a = p.parse_args()
 
@@ -220,7 +242,7 @@ def main():
     if a.stage in ("tokenizer", "all"):
         build_tokenizer(a.out, a.vocab_size, a.tok_mb)
     if a.stage in ("tokenize", "all"):
-        tokenize_corpus(a.out, a.val_permille, a.max_tokens)
+        tokenize_corpus(a.out, a.val_permille, a.max_tokens, refilter=a.refilter)
 
 
 if __name__ == "__main__":

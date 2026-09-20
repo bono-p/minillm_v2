@@ -23,7 +23,23 @@ _DEFECTS = [
     re.compile(r"(?:^|\s),(?:\s|$)"),          # virgule isolée (le " ; " est légitime en français)
     re.compile(r"\b(?:le|la|les|en|du|de|des|au|aux|à|vers)\s+[,;)]"),   # "en ," "du )" : mot-outil suivi d'un vide
     re.compile(r"\{\{|\}\}|\|\||==|<[a-z/][^>]*>"),  # restes de wikitexte / HTML
+    re.compile(r"[,:;]\s*\)"),                   # "(en latin : )" "(né le , )" : parenthèse fermée sur du vide
+    re.compile(r"\(\s*[:;]"),                    # "( : ...)" "( ; ...)"
+    re.compile(r"\(\s*[-–—]+\s*\)"),           # "( - )"
+    re.compile(r"«\s*»|“\s*”"),                  # guillemets vides
+    re.compile(r"\b(?:le|la|les|en|du|de|des|au|aux|à|vers|depuis|entre|et|ou|par)\s+\)"),  # "(né le )", "(en )"
 ]
+
+# Apostrophe d'élision suivie d'une espace ("L' archidiocèse", "d' Italie") : artefact de conversion des liens du dump.
+# En français l'élision n'est JAMAIS suivie d'une espace -> on recolle.
+_ELISION = re.compile(
+    r"\b((?:[LlDdJjMmNnSsTtCc]|[Qq]u|[Jj]usqu|[Ll]orsqu|[Pp]uisqu|[Qq]uelqu|[Pp]resqu)['’]) +(?=[A-Za-zÀ-ÖØ-öø-ÿŒœ])"
+)
+_AUJOURDHUI = re.compile(r"\b([Aa]ujourd['’]) +(hui)\b")
+
+
+def normalize_elisions(text: str) -> str:
+    return _AUJOURDHUI.sub(r"\1\2", _ELISION.sub(r"\1", text))
 
 # Sections de fin d'article : on coupe tout ce qui suit (listes de références, liens...).
 _TAIL_SECTIONS = {
@@ -75,11 +91,25 @@ def clean_wikipedia_text(text: str, min_chars: int = 300, stats: Optional[dict] 
             break                                       # fin d'article : références, liens externes...
         if is_heading(line):
             continue                                    # titres / intertitres / puces courtes
-        cleaned = clean_paragraph(line, stats=stats)
+        cleaned = clean_paragraph(normalize_elisions(line), stats=stats)
         if cleaned and len(cleaned) >= 40:
             paragraphs.append(cleaned)
     doc = "\n\n".join(paragraphs)
     return doc if len(doc) >= min_chars else None
+
+
+_SPAM_TERMS = (
+    "cliquez ici", "en savoir plus", "livraison gratuite", "code promo", "sites de rencontre", "site de rencontre",
+    "casino en ligne", "paris sportifs", "abonnez-vous", "newsletter", "politique de confidentialité", "cookies",
+    "ajouter au panier", "acheter maintenant", "meilleur prix", "devis gratuit", "partager sur", "suivez-nous",
+    "mentions légales", "tous droits réservés", "boutique en ligne", "offre spéciale",
+)
+
+
+def spam_score(text: str) -> int:
+    """Nombre de termes de spam/boilerplate DISTINCTS présents (≥ 3 = page commerciale ou menu de site, pas un texte)."""
+    low = text.lower()
+    return sum(1 for t in _SPAM_TERMS if t in low)
 
 
 def clean_web_text(text: str, min_chars: int = 400, max_chars: int = 20_000) -> Optional[str]:
@@ -88,10 +118,30 @@ def clean_web_text(text: str, min_chars: int = 400, max_chars: int = 20_000) -> 
     if len(text) < min_chars:
         return None
     text = text[:max_chars]
+    if spam_score(text) >= 3:
+        return None
     letters = sum(c.isalpha() for c in text)
     if letters / max(1, len(text)) < 0.6:                # trop de chiffres / symboles
         return None
     lines = [l.strip() for l in text.split("\n") if l.strip()]
     if len(set(lines)) < 0.7 * len(lines):               # lignes répétées (menus, spam)
         return None
-    return "\n\n".join(lines)
+    return normalize_elisions("\n\n".join(lines))
+
+
+def refilter_doc(text: str, src: str, min_chars: int = 300) -> Optional[str]:
+    """
+    Re-nettoie un document DÉJÀ présent dans corpus.jsonl (sans retélécharger) avec les règles actuelles.
+    wiki : normalisation des élisions + suppression des phrases trouées ; autres sources : normalisation seule.
+    """
+    if src != "wiki":
+        if src == "web" and spam_score(text) >= 3:
+            return None
+        return normalize_elisions(text)
+    paragraphs = []
+    for para in text.split("\n\n"):
+        cleaned = clean_paragraph(normalize_elisions(para))
+        if cleaned and len(cleaned) >= 40:
+            paragraphs.append(cleaned)
+    doc = "\n\n".join(paragraphs)
+    return doc if len(doc) >= min_chars else None

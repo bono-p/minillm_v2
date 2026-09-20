@@ -172,6 +172,12 @@ def train(cfg: TrainConfig) -> dict:
         model_cfg = get_preset(cfg.model_size, vocab_size=data_vocab, max_seq_len=cfg.seq_len)
     if cfg.dropout >= 0:
         model_cfg = dataclasses.replace(model_cfg, dropout=cfg.dropout)
+    data_sha = (train_data.meta or {}).get("tokenizer_sha")
+    ref_sha = (ckpt or init_ckpt or {}).get("tokenizer_sha")
+    if data_sha and ref_sha and data_sha != ref_sha:
+        raise ValueError(f"Tokenizer incompatible : les données utilisent le tokenizer {data_sha} mais le checkpoint a été entraîné avec "
+                         f"{ref_sha}. Utilise les MÊMES data/tokenizer.json et .bin que pour le checkpoint (ne reconstruis pas les données).")
+    ckpt_extra = {"tokenizer_sha": data_sha} if data_sha else {}
     if model_cfg.vocab_size != data_vocab:
         raise ValueError(f"Vocabulaire incompatible : modèle={model_cfg.vocab_size}, données={data_vocab}. "
                          "Utilise le même tokenizer pour le pré-entraînement et le SFT.")
@@ -235,7 +241,7 @@ def train(cfg: TrainConfig) -> dict:
     it = start_it
     last_val: Optional[float] = None
     t_start = time.perf_counter()
-    t_log, tok_log = t_start, 0
+    t_log, tok_log, it_log = t_start, 0, start_it
     loss_acc = torch.zeros((), device=device)
     n_acc = 0
     raw_model.train()
@@ -248,7 +254,7 @@ def train(cfg: TrainConfig) -> dict:
         if improved:
             best_val, no_improve = val_loss, 0
             if master:
-                save_best(cfg.out_dir, it, raw_model, model_cfg, cfg, val_loss, tokens_seen)
+                save_best(cfg.out_dir, it, raw_model, model_cfg, cfg, val_loss, tokens_seen, ckpt_extra)
         else:
             no_improve += 1
         say(f"  ┌ EVAL it {it:>6} | val_loss {val_loss:.4f} (ppl {math.exp(min(val_loss, 20)):.1f}) | "
@@ -260,7 +266,7 @@ def train(cfg: TrainConfig) -> dict:
 
     def do_save():
         if master:
-            save_full(cfg.out_dir, it, raw_model, optimizer, scaler, model_cfg, cfg, best_val, no_improve, tokens_seen)
+            save_full(cfg.out_dir, it, raw_model, optimizer, scaler, model_cfg, cfg, best_val, no_improve, tokens_seen, ckpt_extra)
             rolling_cleanup(cfg.out_dir, cfg.keep)
 
     stopped_early = False
@@ -312,16 +318,20 @@ def train(cfg: TrainConfig) -> dict:
                         raise RuntimeError(f"Loss non finie à l'itération {it} ({avg}). Baisse le lr ou vérifie les données.")
                     say(f"⚠️  loss non finie à it {it} (fp16) : le GradScaler saute ces pas, surveillance…")
                     loss_acc.zero_()
-                    n_acc, t_log, tok_log = 0, now, tokens_seen
+                    n_acc, t_log, tok_log, it_log = 0, now, tokens_seen, it
                     continue
                 tps = (tokens_seen - tok_log) / max(1e-9, now - t_log)
+                sec_per_it = (now - t_log) / max(1, it - it_log)
+                eta_h = max(0, max_iters - it) * sec_per_it / 3600            # au rythme actuel (hors évaluations)
+                mem_gb = torch.cuda.max_memory_allocated(device) / 1e9 if device.type == "cuda" else 0.0
                 say(f"it {it:>6}/{max_iters} | loss {avg:.4f} | lr {lr:.2e} | gnorm {float(grad_norm):.2f} | "
-                    f"{tps / 1e3:.1f}k tok/s | {tokens_seen / 1e6:.1f}M tok | {(now - t_start) / 60:.1f} min")
+                    f"{tps / 1e3:.1f}k tok/s | {tokens_seen / 1e6:.1f}M tok | {(now - t_start) / 60:.1f} min | "
+                    f"ETA {eta_h:.1f} h" + (f" | {mem_gb:.1f} Go GPU" if mem_gb else ""))
                 if master:
                     _log_jsonl(log_path, {"type": "train", "it": it, "loss": avg, "lr": lr, "gnorm": float(grad_norm),
-                                          "tok_s": tps, "tokens": tokens_seen})
+                                          "tok_s": tps, "tokens": tokens_seen, "eta_h": eta_h, "mem_gb": mem_gb})
                 loss_acc.zero_()
-                n_acc, t_log, tok_log = 0, now, tokens_seen
+                n_acc, t_log, tok_log, it_log = 0, now, tokens_seen, it
 
             # ── budget temps ────────────────────────────────────────────
             time_up = False
@@ -352,7 +362,7 @@ def train(cfg: TrainConfig) -> dict:
         return {"interrupted": True, "iter": it, "best_val_loss": best_val}
 
     if master:
-        save_final(cfg.out_dir, it, raw_model, model_cfg, cfg, last_val, tokens_seen)
+        save_final(cfg.out_dir, it, raw_model, model_cfg, cfg, last_val, tokens_seen, ckpt_extra)
     say(f"✅ terminé à it={it} | meilleure val_loss={best_val:.4f} -> {os.path.join(cfg.out_dir, 'best.pt')}")
     if ddp:
         dist.barrier()
