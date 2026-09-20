@@ -371,13 +371,43 @@ def test_sampling_filters():
 #  Personnalité
 # ══════════════════════════════════════════════════════════════════════════════
 def test_persona_file_is_valid():
+    """personnalite.jsonl = identité + caractère : lisible, sans doublon, sans fait qui vieillit, cohérent avec DevLab / MiniLLM."""
+    import check_data
     path = os.path.join(ROOT, "personnalite.jsonl")
+    errors, warns, n = check_data.check_file(path)
+    assert not errors and not warns, (errors, warns)
     rows = [json.loads(l) for l in open(path, encoding="utf-8") if l.strip()]
-    assert 1 <= len(rows) <= 30
-    qs = [r["question"] for r in rows]
-    assert len(set(qs)) == len(qs)                                          # pas de question en double
-    assert all(r["question"].strip() and r["answer"].strip() and "<|" not in r["question"] + r["answer"] for r in rows)
+    assert 60 <= len(rows) <= 200 and n == len(rows)
     assert any("MiniLLM" in r["answer"] for r in rows) and any("DevLab" in r["answer"] for r in rows)
+    # règle de cohérence : la personnalité ne contient pas de faits encyclopédiques (ils vivent dans knowledge/ et datasets/)
+    text = " ".join(r["question"] for r in rows).lower()
+    for fact_marker in ("chef-lieu", "quelle est la capitale", "superficie", "combien d'habitants", "coupe d'afrique"):
+        assert fact_marker not in text, fact_marker
+
+
+def test_shipped_datasets_pass_the_linter():
+    import check_data, glob
+    files = glob.glob(os.path.join(ROOT, "datasets", "*.jsonl"))
+    assert files
+    for f in files:
+        errors, warns, n = check_data.check_file(f)
+        assert not errors and not warns and n >= 50, (f, errors, warns[:3])
+
+
+def test_check_data_detects_problems(tmp_path):
+    import check_data
+    p = tmp_path / "x.jsonl"
+    p.write_text(
+        '{"question": "Qui est le président du Cameroun ?", "answer": "Le président est X, au pouvoir depuis 1982."}\n'
+        '{"question": "Q dup ?", "answer": "R1."}\n{"question": "q dup ?", "answer": "R2."}\n'
+        '{"question": "Vide ?", "answer": "  "}\n'
+        'ceci n\'est pas du json\n'
+        '{"question": "Token ?", "answer": "contient <|end|> interdit."}\n', encoding="utf-8")
+    errors, warns, n = check_data.check_file(str(p))
+    assert n == 4                                                    # 4 lignes exploitables sur 6
+    assert any("JSON invalide" in e for e in errors) and any("vide" in e for e in errors) and any("<|" in e for e in errors)
+    assert any("vieillir" in w for w in warns) and any("double" in w for w in warns)
+    assert check_data.main.__module__ == "check_data"
 
 
 def test_identity_filter_drops_contradicting_examples():
@@ -586,3 +616,54 @@ def test_v2_checkpoints_without_fingerprint_still_resume(tok_and_data, tmp_path)
     ck.pop("tokenizer_sha", None)
     torch.save(ck, path)
     assert train.train(_tiny_cfg(data, out, max_iters=10))["iter"] == 10
+
+
+def test_rag_supports_qa_jsonl_coverage_guard_and_multiple_sources(tmp_path):
+    from rag import load_knowledge_many, BM25Index
+    kb = tmp_path / "kb"
+    kb.mkdir()
+    (kb / "a.jsonl").write_text('{"question": "Quelle est la capitale du Togo ?", "answer": "La capitale du Togo est Lomé."}\n'
+                                '{"text": "Le lac Tchad se situe entre le Tchad, le Niger, le Nigeria et le Cameroun."}\n', encoding="utf-8")
+    (kb / "b.txt").write_text("Le mont Cameroun est le plus haut sommet du Cameroun.\n\nOk\n\nLa Sanaga est un fleuve.", encoding="utf-8")
+    passages = load_knowledge_many([str(kb / "a.jsonl"), str(kb / "b.txt")])
+    assert "La capitale du Togo est Lomé." in passages                # Q/R : la réponse devient le passage
+    assert "Ok" not in passages and "La Sanaga est un fleuve." in passages   # < 20 caractères ignoré, court mais valide gardé
+    idx = BM25Index(passages)
+    assert "Lomé" in passages[idx.search("Peux-tu me dire quelle est la capitale du Togo ?", 1)[0][1]]
+    assert "Sanaga" in passages[idx.search("Où se trouve la Sanaga ?", 1)[0][1]]
+    assert idx.search("Qui a gagné la Coupe du monde 1998 ?", 1) == []      # sujet voisin mais pas de réponse -> rejeté
+    assert idx.search("le la les de", 1) == []                              # aucun mot utile
+
+
+def test_shipped_knowledge_answers_key_questions():
+    from rag import load_knowledge_many, BM25Index
+    passages = load_knowledge_many([os.path.join(ROOT, "knowledge"), os.path.join(ROOT, "datasets")])
+    assert len(passages) > 200
+    idx = BM25Index(passages)
+    cases = {"Quelle est la capitale du Togo ?": "Lomé", "Quel est le chef-lieu de la région du Nord ?": "Garoua",
+             "Combien de paramètres a MiniLLM ?": "49 millions", "Qu'est-ce qu'un token ?": "morceau de texte",
+             "Quelle est la capitale de la Tanzanie ?": "Dodoma", "Sur quel fleuve est construite Garoua ?": "Bénoué"}
+    for q, expected in cases.items():
+        hit = idx.search(q, 1)
+        assert hit and expected in passages[hit[0][1]], q
+    assert idx.search("Qui est le président de la France ?", 1) == []
+
+
+def test_extra_jsonl_can_be_repeated_in_train_only(tok_and_data, tmp_path):
+    import sft_data
+    from data import SFTData
+    tok, data = tok_and_data
+    extra = tmp_path / "faits.jsonl"
+    qs = [f"Question de test numéro {i} sur un fait ?" for i in range(20)]
+    extra.write_text("\n".join(json.dumps({"question": q, "answer": f"Réponse {i}."}, ensure_ascii=False) for i, q in enumerate(qs)), encoding="utf-8")
+    out = str(tmp_path / "sft")
+    meta = sft_data.build_sft(os.path.join(data, "tokenizer.json"), out, alpaca=0, piaf=0, oasst=0, synthetic_repeat=1, max_len=200,
+                              val_permille=100, extra_jsonl=[str(extra)], extra_repeat=3)
+    assert any(k.startswith("jsonl:") for k in meta["sources"])
+    d = SFTData(out, "train", batch_size=2, pad_id=tok.pad_id)
+    counts = {q: 0 for q in qs}
+    for i in range(d.n):
+        text = tok.decode([int(t) for t in d.tokens[d.offsets[i]:d.offsets[i + 1]]])
+        for q in qs:
+            counts[q] += q in text
+    assert set(counts.values()) <= {0, 3} and 3 in counts.values()         # chaque fait : 3 copies en train (ou 0 s'il est tombé en val)

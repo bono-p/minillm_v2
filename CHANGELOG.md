@@ -9,7 +9,11 @@
 * **Évaluation** : `evaluate.py persona`.
 * **Logs** : ETA et mémoire GPU (`log.jsonl` inclus).
 * **SFT** : PIAF complet par défaut (4 000 max).
-* **Tests** : 39 (continuité du flux de données entre 1 et 2 GPU, RAG, outils Kaggle, garde-fou tokenizer, refilter de bout en bout…).
+* **Tests** : 44 (continuité du flux de données entre 1 et 2 GPU, RAG, outils Kaggle, garde-fou tokenizer, refilter de bout en bout…).
+* **Personnalité redessinée** : `personnalite.jsonl` = identité + caractère (132 Q/R, une seule règle de ton, plus de faits ni de contradictions « pas de sentiments » / « je suis fier ») + `PERSONNALITE.md` (fiche de personnage et règles d'écriture). `--persona_repeat` 8 par défaut.
+* **Faits séparés** : `datasets/faits_cameroun_afrique.jsonl` (109 Q/R nettoyées : doublons, faits qui vieillissent retirés, réponses corrigées) — utilisable au SFT (`--extra_jsonl`, nouveau `--extra_repeat`) et par le RAG.
+* **RAG** : base de connaissances élargie (`minillm.txt`, `ia_bases.txt`, `cameroun.txt`, `capitales_monde.txt`), Q/R `.jsonl` acceptées (la réponse sert de passage), `--kb` multi-sources, garde-fou de couverture des mots de la question, mots vides conversationnels.
+* **`check_data.py`** : vérifie les `.jsonl` (JSON, champs, doublons, faits qui vieillissent…).
 * Compatibilité : aucun changement d'architecture ni de format de checkpoint (champ optionnel `tokenizer_sha`) : les checkpoints et données v2 restent utilisables.
 
 Chaque ligne relie un problème constaté à l'audit à sa correction et au fichier concerné.

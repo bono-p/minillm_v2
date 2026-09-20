@@ -7,8 +7,8 @@ et on le lui donne dans le MÊME format que pendant le SFT :
 
     Réponds à la question à partir du texte.\\n\\nTexte : …\\n\\nQuestion : …
 
-Base de connaissances : un dossier (ou fichier) de .txt / .md (paragraphes séparés par une ligne vide) et/ou .jsonl
-({"text": "..."}). Voir knowledge/ pour un exemple.
+Base de connaissances : un ou plusieurs dossiers/fichiers de .txt / .md (paragraphes séparés par une ligne vide) et/ou
+.jsonl ({"text": "..."} ou une Q/R {"question":…,"answer":…} : la réponse sert de passage). Voir knowledge/ et datasets/.
 
 Usage :
     python rag.py --ckpt checkpoints/sft/best.pt --kb knowledge/
@@ -31,7 +31,9 @@ from typing import List, Optional, Sequence, Tuple
 
 _STOP = set("""le la les un une des du de d l et ou a à au aux en dans sur par pour avec sans que qui quoi quel quelle quels quelles
 est sont etre c ce cet cette ces se sa son ses ne pas plus tu vous il elle on nous ils elles y mon ma mes ton ta tes je me te
-comment combien pourquoi quand ou est-ce qu""".split())
+comment combien pourquoi quand ou est-ce qu
+peux peut pouvez dis dire moi savoir veux voulez voudrais sais connais svp stp plait merci bonjour salut trouve trouvent situe situee
+situes appelle cite donne parle explique""".split())
 
 RAG_INSTRUCTION = "Réponds à la question à partir du texte."
 
@@ -66,10 +68,19 @@ class BM25Index:
         n = len(self.docs)
         self.idf = {t: math.log(1 + (n - c + 0.5) / (c + 0.5)) for t, c in df.items()}
 
-    def search(self, query: str, k: int = 3) -> List[Tuple[float, int]]:
+    def search(self, query: str, k: int = 3, min_coverage: float = 0.5) -> List[Tuple[float, int]]:
+        """
+        Meilleurs passages. `min_coverage` : il faut que STRICTEMENT plus de la moitié des mots utiles de la question figurent dans
+        le passage (« Qui a gagné la Coupe du monde 1998 ? » ne doit pas renvoyer un texte qui parle d'une autre Coupe du monde).
+        """
+        uni = tokenize(query)
+        if not uni:
+            return []
         q = terms(query)
         scored = []
         for i, d in enumerate(self.docs):
+            if sum(1 for t in set(uni) if d.get(t, 0)) / len(set(uni)) <= min_coverage:
+                continue
             score = 0.0
             for t in q:
                 f = d.get(t, 0)
@@ -108,14 +119,22 @@ def load_knowledge(path: str) -> List[str]:
             if ext == ".jsonl":
                 for line in fh:
                     if line.strip():
-                        text = json.loads(line).get("text", "").strip()
+                        row = json.loads(line)
+                        text = (row.get("text") or row.get("answer") or "").strip()   # {"text":…} ou une Q/R : la RÉPONSE sert de passage
                         passages += _split_long(text) if text else []
             else:
                 for para in fh.read().split("\n\n"):
                     para = " ".join(para.split())
-                    if len(para) >= 30 and not para.startswith("#"):
+                    if len(para) >= 20 and not para.startswith("#"):
                         passages += _split_long(para)
     return passages
+
+
+def load_knowledge_many(paths: Sequence[str]) -> List[str]:
+    out: List[str] = []
+    for p in paths:
+        out += load_knowledge(p)
+    return out
 
 
 # ── prompt ──────────────────────────────────────────────────────────────────
@@ -172,13 +191,13 @@ def main():
     from generate import load_model
     p = argparse.ArgumentParser(description="MiniLLM — mini-RAG")
     p.add_argument("--ckpt", required=True)
-    p.add_argument("--kb", default="knowledge", help="fichier ou dossier (.txt/.md/.jsonl)")
+    p.add_argument("--kb", nargs="+", default=["knowledge"], help="un ou plusieurs fichiers/dossiers (.txt/.md/.jsonl ; ex. knowledge datasets)")
     p.add_argument("--tokenizer", default=None)
     p.add_argument("--question", default=None)
     p.add_argument("--device", default="auto")
     p.add_argument("--temperature", type=float, default=0.2)
     a = p.parse_args()
-    passages = load_knowledge(a.kb)
+    passages = load_knowledge_many(a.kb)
     if not passages:
         raise SystemExit(f"Base de connaissances vide : {a.kb}")
     index = BM25Index(passages)

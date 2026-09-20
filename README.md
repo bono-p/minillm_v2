@@ -65,7 +65,7 @@ python train.py --mode sft --data_dir data/sft --out_dir checkpoints/sft --init_
 python generate.py --ckpt checkpoints/sft/best.pt --mode chat
 python evaluate.py qa      --ckpt checkpoints/sft/best.pt --sft_dir data/sft
 python evaluate.py persona --ckpt checkpoints/sft/best.pt
-python rag.py --ckpt checkpoints/sft/best.pt --kb knowledge/ --question "Quelle est la capitale du Cameroun ?"
+python rag.py --ckpt checkpoints/sft/best.pt --kb knowledge datasets --question "Quelle est la capitale du Cameroun ?"
 ```
 100 % hors-ligne possible : `prepare_data.py all --wiki_docs 0 --local_txt mes_textes/*.txt`.
 
@@ -140,12 +140,13 @@ Les apostrophes ’ et ' ne sont pas unifiées (choix : sans gravité).
 | French-Alpaca (`jpacifico/French-Alpaca-dataset-Instruct-110K`) | 30 000 | réponses courtes (3–350 caractères) |
 | OpenAssistant FR (`OpenAssistant/oasst1`) | 3 000 (souvent moins) | meilleure réponse en français |
 | PIAF (`etalab-ia/piaf`) | 4 000 (~3 800 dispo.) | « réponds à partir du texte », fenêtre de 600 caractères **centrée sur la réponse** |
-| `personnalite.jsonl` | ≤ 30 × 20 copies | identité, toujours en `train` |
+| `personnalite.jsonl` | 132 lignes × 8 copies (≈ 3 % du SFT) | **identité et caractère** uniquement (voir `PERSONNALITE.md`), toujours en `train` |
+| `datasets/faits_cameroun_afrique.jsonl` (optionnel) | 109 × `--extra_repeat` | faits Cameroun/Afrique en Q/R ; **non utilisé par défaut** (les faits passent par le RAG) ; `--extra_jsonl datasets/faits_cameroun_afrique.jsonl --extra_repeat 3` pour les faire apprendre |
 | tes données (`--extra_jsonl`) | libre | `{"question":…,"answer":…}` ou `{"messages":[…]}` |
 
 Tout est converti en `<|user|>…<|end|><|assistant|>…<|end|>`, la loss ne porte que sur les réponses, les exemples trop longs sont écartés (jamais tronqués), les
 exemples externes qui parlent de l'identité de l'assistant (« en tant qu'IA », ChatGPT, OpenAI…) sont filtrés, puis tout est mélangé et groupé par longueur.
-Il n'y a **pas de pondération par source** : les proportions viennent des quantités demandées (`--alpaca`, `--oasst`, `--piaf`, `--synthetic_repeat`, `--persona_repeat`).
+Il n'y a **pas de pondération par source** : les proportions viennent des quantités demandées (`--alpaca`, `--oasst`, `--piaf`, `--synthetic_repeat`, `--persona_repeat`, `--extra_repeat`).
 
 ---
 
@@ -177,14 +178,16 @@ Le nom affiché dans les logs est calculé avec le vocabulaire **réel** des don
 | `text_cleaning.py` | nettoyage Wikipédia (trous, élisions, sections de fin), filtre web anti-spam, `refilter_doc` |
 | `prepare_data.py` | `corpus` → `tokenizer` → `tokenize` (`--refilter`) ; split par document, `<|endoftext|>` entre documents |
 | `synthetic_qa.py` | ~2 100 Q/R propres générées par code |
-| `personnalite.jsonl` | **≤ 30 Q/R sur le modèle lui-même** — à éditer librement |
+| `personnalite.jsonl` · `PERSONNALITE.md` | identité + caractère du modèle (132 Q/R) · guide pour en ajouter sans créer de contradictions |
+| `datasets/` | jeux de Q/R de faits (Cameroun, Afrique), utilisables au SFT (`--extra_jsonl`) **et** par le RAG |
+| `check_data.py` | vérifie tes `.jsonl` (JSON valide, doublons, faits qui vieillissent…) avant d'entraîner |
 | `sft_data.py` | jeu SFT multi-sources, masque de loss, filtre d'identité, `--persona` |
 | `data.py` | loaders **déterministes** : val fixe, époques sans remise, SFT groupé par longueur |
 | `checkpoint.py` | sauvegardes atomiques, `best`/`final`/reprise, nettoyage numérique |
 | `train.py` | boucle unique (pretrain + SFT), DDP, budget temps, log JSONL (ETA, mémoire GPU), garde-fou tokenizer |
 | `generate.py` | génération KV-cache, chat au bon template, streaming, anti-répétition |
 | `evaluate.py` | `perplexity`, `qa` (EM/F1), `demo`, **`persona`** |
-| `rag.py` · `knowledge/` | mini-RAG (BM25) sur ta base de textes |
+| `rag.py` · `knowledge/` | mini-RAG (BM25) · base de connaissances : `minillm.txt`, `ia_bases.txt`, `cameroun.txt`, `capitales_monde.txt` |
 | `kaggle_utils.py` | restauration `/kaggle/input`, Drive (`gdown`), vérifications (tailles des `.bin`, checkpoint), élagage |
 | `MiniLLM_v2.ipynb` · `MiniLLM_v2_Kaggle.ipynb` | notebooks Colab · Kaggle |
 | `inspect_model.py` · `smoke_test.py` · `tests/` | vérifications |
@@ -217,8 +220,9 @@ En SFT la val_loss ne porte que sur les réponses.
 
 ## Personnalité, SFT, génération
 
-**Personnalité** — `personnalite.jsonl` (≤ 30 Q/R : « Comment tu t'appelles ? » → « Je suis MiniLLM… ») est ajouté au SFT, toujours en `train` (jamais en `val`) et
-répété 20 fois. **Pas de system prompt** : la personnalité vit dans les poids (un modèle de cette taille suit mal les consignes, et le contexte de 512 tokens reste libre).
+**Personnalité** — `personnalite.jsonl` (132 Q/R d'**identité et de caractère** : « Comment tu t'appelles ? » → « Je suis MiniLLM… ») est ajouté au SFT, toujours en `train`
+(jamais en `val`) et répété 8 fois (≈ 3 % du SFT). Les **faits** n'y sont plus : ils sont dans `knowledge/` (RAG, modifiables sans ré-entraîner) et `datasets/` (optionnel au SFT).
+Règles d'écriture et fiche de personnage : `PERSONNALITE.md` ; vérification avant entraînement : `python check_data.py personnalite.jsonl datasets/*.jsonl`. **Pas de system prompt** : la personnalité vit dans les poids (un modèle de cette taille suit mal les consignes, et le contexte de 512 tokens reste libre).
 Vérification : `python evaluate.py persona --ckpt …` (F1 ≈ 1 = appris par cœur ; les reformulations se jugent avec `evaluate.py demo`).
 Pour la changer : édite le fichier, supprime `data/sft`, relance `sft_data.py` puis le SFT (pas besoin de refaire le pré-entraînement).
 
@@ -236,12 +240,16 @@ le bon paragraphe dans **ta** base (BM25 unigrammes + bigrammes, sans dépendanc
 `Réponds à la question à partir du texte.\n\nTexte : …\n\nQuestion : …`.
 
 ```bash
-python rag.py --ckpt checkpoints/sft/best.pt --kb knowledge/            # interactif ; le passage utilisé est toujours affiché
+python rag.py --ckpt checkpoints/sft/best.pt --kb knowledge datasets    # interactif ; le passage utilisé est toujours affiché
 ```
-* Base : dossier ou fichier de `.txt` / `.md` (paragraphes séparés par une ligne vide) et/ou `.jsonl` (`{"text": "…"}`). Exemple : `knowledge/exemple.txt`.
-* **Écris une phrase par fait, avec le sujet dans la phrase** (« La capitale du Cameroun est Yaoundé. ») : le retrieval et le modèle en dépendent.
-* Sans passage pertinent, le modèle répond « librement » (et peut inventer).
-* ⚠️ Testé : la recherche du bon passage (10/10 sur l'exemple fourni, base minuscule). **Non mesuré** : la qualité des réponses du modèle (dépend du SFT) → juge sur le passage affiché.
+**Architecture** : `rag.py` = (1) *retriever* BM25 sans IA, (2) le modèle SFT qui lit le passage et répond. **Découpage (chunking)** : un morceau = un paragraphe (bloc séparé par une ligne vide) ;
+< 20 caractères ou titre `#` : ignoré ; > 700 caractères : coupé par phrases ; pas de chevauchement ; une ligne `.jsonl` = un texte, ou la *réponse* d'une Q/R. **Recherche** : mots sans accents/majuscules/mots vides,
+unigrammes + bigrammes, 1 seul meilleur passage ; **garde-fou** : il faut que **plus de la moitié** des mots utiles de la question soient dans le passage, sinon aucun passage n'est renvoyé.
+À l'affichage, un passage > 600 caractères est recentré sur la phrase la plus proche de la question, puis réduit pour tenir dans les 512 tokens.
+* Base fournie (`knowledge/` + `datasets/`, ~270 passages) : `minillm.txt` (le projet), `ia_bases.txt` (définitions IA), `cameroun.txt`, `capitales_monde.txt` (95 pays), `faits_cameroun_afrique.jsonl`.
+* **Ajouter des infos** : mets un `.txt`/`.md` dans `knowledge/` (ou un `.jsonl`), **un fait par paragraphe, sujet dans la phrase** (« La capitale du Cameroun est Yaoundé. », pas « Elle est Yaoundé. »). Aucun ré-entraînement.
+* Sans passage pertinent, le modèle répond « librement » (et peut inventer). Pas de recherche par sens : « président » ne retrouve pas « chef de l'État » ; un passage voisin mais sans la réponse peut encore être renvoyé si la question partage plus de la moitié de ses mots.
+* ⚠️ Testé : retrouver le bon passage — 34/34 sur mes 34 questions (dont 3 sans réponse à rejeter) : **évaluation optimiste**, j'ai écrit la base et les questions. **Non mesuré** : la qualité des réponses du modèle (dépend du SFT) → juge sur le passage affiché.
 
 ---
 
@@ -297,7 +305,7 @@ répétitions au bout de quelques phrases, ne répond pas aux questions (normal 
 ## Tests
 
 ```bash
-python -m pytest -q          # 39 tests, CPU, ~1 min : KV-cache = forward complet, nombre de paramètres exact, masque de loss, nettoyage,
+python -m pytest -q          # 44 tests, CPU, ~1 min : KV-cache = forward complet, nombre de paramètres exact, masque de loss, nettoyage,
                              # tokenizer, loaders, reprise exacte, best jamais écrasé, DDP 2 processus, continuité 1↔2 GPU, RAG, outils Kaggle…
 python smoke_test.py         # pipeline complet sur un mini modèle (corpus local -> tokenizer -> pretrain -> reprise -> SFT -> génération)
 ```

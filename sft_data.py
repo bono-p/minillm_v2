@@ -179,7 +179,7 @@ def _safe(name: str, fn, *args, **kwargs) -> List[Conv]:
 
 def build_sft(tokenizer_path: str, out_dir: str, alpaca: int = 30_000, piaf: int = 4_000, oasst: int = 3_000,
               synthetic_repeat: int = 2, extra_jsonl: Optional[List[str]] = None, max_len: int = 512,
-              val_permille: int = 20, seed: int = 0, persona: Optional[str] = None, persona_repeat: int = 20) -> dict:
+              val_permille: int = 20, seed: int = 0, persona: Optional[str] = None, persona_repeat: int = 8, extra_repeat: int = 1) -> dict:
     tok = MiniTokenizer(tokenizer_path)
     os.makedirs(out_dir, exist_ok=True)
     print("Sources :")
@@ -209,7 +209,8 @@ def build_sft(tokenizer_path: str, out_dir: str, alpaca: int = 30_000, piaf: int
                 continue
             key = conv["messages"][0]["content"].encode("utf-8")
             split = "val" if zlib.crc32(key) % 1000 < val_permille else "train"
-            splits[split].append((ids, mask))
+            copies = extra_repeat if (name.startswith("jsonl:") and split == "train") else 1
+            splits[split] += [(ids, mask)] * copies
             per_source[name] = per_source.get(name, 0) + 1
     if len(splits["val"]) < 50:                                  # petit corpus : garantit un val exploitable
         step = max(2, len(splits["train"]) // 50)
@@ -264,10 +265,11 @@ def main():
     default_persona = os.path.join(os.path.dirname(os.path.abspath(__file__)), "personnalite.jsonl")
     p.add_argument("--persona", default=default_persona if os.path.exists(default_persona) else "",
                    help="fichier .jsonl de Q/R sur le modèle lui-même (personnalité) ; \"\" pour désactiver")
-    p.add_argument("--persona_repeat", type=int, default=20, help="nb de copies de chaque Q/R de personnalité dans train")
+    p.add_argument("--persona_repeat", type=int, default=8, help="nb de copies de chaque Q/R de personnalité dans train")
+    p.add_argument("--extra_repeat", type=int, default=1, help="nb de copies de chaque exemple de --extra_jsonl dans train (ex. 3 pour datasets/faits_cameroun_afrique.jsonl)")
     a = p.parse_args()
     build_sft(a.tokenizer, a.out, a.alpaca, a.piaf, a.oasst, a.synthetic_repeat, a.extra_jsonl, a.max_len,
-              a.val_permille, a.seed, a.persona or None, a.persona_repeat)
+              a.val_permille, a.seed, a.persona or None, a.persona_repeat, a.extra_repeat)
 
 
 if __name__ == "__main__":

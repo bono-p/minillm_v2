@@ -1,0 +1,23 @@
+L'intelligence artificielle, ou IA, regroupe des techniques qui permettent à des machines d'accomplir des tâches qui demandent habituellement de l'intelligence humaine, comme comprendre un texte ou reconnaître une image.
+
+L'apprentissage automatique, en anglais machine learning, est une méthode où un programme apprend à partir d'exemples plutôt que de suivre des règles écrites à la main.
+
+Un modèle de langage est un programme qui apprend à prédire le mot suivant dans un texte. En répétant cette prédiction, il peut écrire des phrases entières.
+
+LLM veut dire « Large Language Model », c'est-à-dire grand modèle de langage. Ce sont des modèles entraînés sur d'énormes quantités de texte.
+
+Les paramètres d'un modèle sont les nombres qu'il ajuste pendant l'entraînement. Plus un modèle a de paramètres, plus il peut retenir de choses, mais plus il coûte cher à entraîner.
+
+Un token est un morceau de texte, souvent un mot ou une partie de mot, que le modèle lit et écrit.
+
+Le pré-entraînement consiste à faire lire au modèle beaucoup de texte pour qu'il apprenne la langue.
+
+Le fine-tuning, ou affinage, consiste à poursuivre l'entraînement d'un modèle sur des données plus ciblées, par exemple des questions et des réponses, pour lui apprendre une tâche précise.
+
+Une hallucination, en IA, est une réponse inventée qui a l'air vraie. Les modèles de langage peuvent halluciner, surtout sur les sujets qu'ils connaissent mal.
+
+Le RAG, pour génération augmentée par la recherche, consiste à chercher d'abord un texte utile dans une base de connaissances, puis à le donner au modèle pour qu'il réponde à partir de ce texte.
+
+Un Transformer est une architecture de réseau de neurones proposée en 2017. Elle est à la base de la plupart des modèles de langage actuels.
+
+Le contexte d'un modèle est la quantité de texte qu'il peut lire en une fois. Au-delà, il oublie le début de la conversation.

@@ -1,0 +1,17 @@
+MiniLLM est un petit modèle de langage en français créé par DevLab au Cameroun. Il est entraîné à partir de zéro, sans reprendre les poids d'un autre modèle.
+
+MiniLLM est un Transformer de type décodeur. Il utilise la normalisation RMSNorm, les embeddings rotatifs RoPE, des couches SwiGLU et une normalisation des requêtes et des clés (QK-norm).
+
+Le nombre de paramètres de MiniLLM : la version par défaut de MiniLLM compte environ 49 millions de paramètres, dont environ 32 millions hors embeddings. Le contexte de MiniLLM est de 512 tokens, soit quelques paragraphes de texte.
+
+Le tokenizer de MiniLLM est un BPE de 32 000 tokens, entraîné sur un corpus français.
+
+MiniLLM est entraîné sur du texte français : des articles de Wikipédia nettoyés et des pages web en français. Le corpus d'entraînement par défaut représente environ 340 millions de tokens.
+
+Après le pré-entraînement, MiniLLM est affiné (fine-tuning) sur des questions et des réponses pour apprendre à répondre : des exemples synthétiques, French-Alpaca, OpenAssistant, PIAF et un fichier de personnalité.
+
+MiniLLM a été entraîné avec des moyens modestes, sur des GPU gratuits comme ceux de Colab et de Kaggle.
+
+MiniLLM ne connaît pas l'actualité et ne peut pas chercher sur Internet. Il peut inventer des réponses, surtout sur les sujets qu'il connaît mal.
+
+MiniLLM peut utiliser le RAG : il cherche d'abord un texte utile dans une base de connaissances, puis répond à partir de ce texte. Cette base est le dossier knowledge.
