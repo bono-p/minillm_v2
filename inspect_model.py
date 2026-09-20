@@ -1,148 +1,76 @@
-# inspect_model.py — MiniLLM v2
-#
-# Vérifie et affiche les infos sur le modèle sans l'entraîner.
-# Utile pour valider l'architecture avant de lancer un long entraînement.
-#
-# Usage :
-#   python inspect_model.py               # affiche tous les presets
-#   python inspect_model.py --size 50M    # détails du modèle 50M
-#   python inspect_model.py --checkpoint checkpoints/best.pt
+"""
+inspect_model.py — inspecte les presets et vérifie qu'un modèle est sain AVANT de lancer un long entraînement.
+
+  python inspect_model.py                 # tableau des presets (vrais nombres de paramètres) + estimation mémoire
+  python inspect_model.py --size 49M      # + instancie le modèle, vérifie la loss initiale et mesure la vitesse
+  python inspect_model.py --ckpt checkpoints/sft/best.pt      # décrit un checkpoint
+"""
+from __future__ import annotations
 
 import argparse
+import math
+import time
+
 import torch
-from config import ModelConfig, PRESETS
-from model  import MiniLLM
+
+from checkpoint import load_checkpoint
+from config import ModelConfig, PRESETS, get_preset
+from model import MiniLLM
 
 
-def print_separator(char="═", width=62):
-    print(char * width)
+def table():
+    print(f"{'preset':>7} | {'couches':>7} {'d_model':>7} {'têtes':>5} {'kv':>3} {'ffn':>5} {'ctx':>5} | "
+          f"{'params totaux':>14} {'dont embeddings':>16} | poids fp32   optim.+grad (entraînement)")
+    print("-" * 122)
+    for name, c in PRESETS.items():
+        n, emb = c.count_params(), c.vocab_size * c.d_model
+        print(f"{name:>7} | {c.n_layers:>7} {c.d_model:>7} {c.n_heads:>5} {c.kv_heads:>3} {c.ffn_hidden:>5} {c.max_seq_len:>5} | "
+              f"{n:>14,} {emb / n * 100:>14.0f} % | {n * 4 / 1e9:>7.2f} Go   {n * 16 / 1e9:>7.2f} Go")
+    print(f"\n(vocabulaire par défaut : {next(iter(PRESETS.values())).vocab_size:,} tokens ; les noms sont calculés, pas écrits à la main)")
 
 
-def inspect_preset(size: str):
-    """Affiche les détails d'un preset."""
-    cfg   = PRESETS[size]
-    model = MiniLLM(cfg)
-
-    n_total   = model.n_params
-    n_emb     = cfg.vocab_size * cfg.d_model
-    n_blocks  = sum(p.numel() for n, p in model.named_parameters()
-                    if "blocks" in n)
-    n_head    = sum(p.numel() for n, p in model.named_parameters()
-                    if "lm_head" in n and "tok_emb" not in n)
-
-    print_separator()
-    print(f"  MiniLLM-{size}")
-    print_separator()
-    print(f"  Paramètres total  : {n_total/1e6:.2f}M")
-    print(f"  ├── Embedding     : {n_emb/1e6:.2f}M  ({n_emb/n_total*100:.1f}%)")
-    print(f"  ├── Blocs (×{cfg.n_layers:2d})  : {n_blocks/1e6:.2f}M  ({n_blocks/n_total*100:.1f}%)")
-    print(f"  └── LM Head       : {'partagé (tied)' if cfg.tie_embeddings else f'{n_head/1e6:.2f}M'}")
-    print()
-    print(f"  Architecture :")
-    print(f"  ├── n_layers      : {cfg.n_layers}")
-    print(f"  ├── d_model       : {cfg.d_model}")
-    print(f"  ├── n_heads (Q)   : {cfg.n_heads}")
-    print(f"  ├── kv_heads      : {cfg.kv_heads}  {'(MHA)' if cfg.kv_heads == cfg.n_heads else f'(GQA, ×{cfg.n_heads//cfg.kv_heads} ratio)'}")
-    print(f"  ├── head_dim      : {cfg.head_dim}")
-    print(f"  ├── ffn_hidden    : {cfg.ffn_hidden}")
-    print(f"  ├── max_seq_len   : {cfg.max_seq_len}")
-    print(f"  └── vocab_size    : {cfg.vocab_size:,}")
-    print()
-
-    # Par couche
-    per_layer_attn = (cfg.d_model * cfg.n_heads  * cfg.head_dim
-                    + cfg.d_model * cfg.kv_heads * cfg.head_dim * 2
-                    + cfg.d_model * cfg.d_model)
-    per_layer_ffn  = (cfg.d_model * cfg.ffn_hidden * 2 + cfg.ffn_hidden * cfg.d_model)
-    per_layer      = per_layer_attn + per_layer_ffn + 2 * cfg.d_model
-    print(f"  Par couche :")
-    print(f"  ├── Attention     : {per_layer_attn/1e6:.3f}M")
-    print(f"  ├── SwiGLU FFN    : {per_layer_ffn/1e6:.3f}M")
-    print(f"  └── Total/couche  : {per_layer/1e6:.3f}M")
-    print()
-
-    # Estimation mémoire
-    bytes_fp32  = n_total * 4
-    bytes_bf16  = n_total * 2
-    # Pendant l'entraînement : poids fp32 + gradients fp32 + optimizer states (×2)
-    train_mem   = n_total * 4 * 4    # poids + grads + Adam m + Adam v
-    print(f"  Mémoire estimée :")
-    print(f"  ├── Inférence fp32  : {bytes_fp32/1e9:.2f} GB")
-    print(f"  ├── Inférence bf16  : {bytes_bf16/1e9:.2f} GB")
-    print(f"  └── Entraînement    : ~{train_mem/1e9:.2f} GB (poids + grads + Adam)")
-    print()
-
-    # Test forward rapide
-    print(f"  Test forward pass...")
-    x = torch.randint(0, cfg.vocab_size, (2, 64))
-    with torch.no_grad():
-        logits, loss = model(x, x)
-    print(f"  ✓ Input  : {list(x.shape)}")
-    print(f"  ✓ Logits : {list(logits.shape)}")
-    print(f"  ✓ Loss   : {loss.item():.4f}  (attendu ≈ {torch.log(torch.tensor(cfg.vocab_size)).item():.2f})")
-    print_separator()
-    print()
+def check(size: str, seq: int, device: str):
+    cfg = get_preset(size, max_seq_len=max(seq, 64))
+    m = MiniLLM(cfg).to(device)
+    n = m.num_params()
+    assert n == cfg.count_params(), "count_params() ne correspond pas au vrai modèle !"
+    print(f"\nModèle {cfg.size_name()} : {n:,} paramètres ({cfg.count_non_embedding_params():,} hors embeddings)")
+    x = torch.randint(0, cfg.vocab_size, (2, seq), device=device)
+    y = torch.randint(0, cfg.vocab_size, (2, seq), device=device)          # cibles INDÉPENDANTES (l'ancien test utilisait y = x)
+    _, loss = m(x, y)
+    print(f"Loss initiale : {loss.item():.3f} (attendu ≈ ln(V) = {math.log(cfg.vocab_size):.3f}) "
+          f"{'✓' if abs(loss.item() - math.log(cfg.vocab_size)) < 0.5 else '⚠️ init suspecte'}")
+    loss.backward()
+    gn = math.sqrt(sum((p.grad.float() ** 2).sum().item() for p in m.parameters() if p.grad is not None))
+    print(f"Norme du gradient : {gn:.2f} | gradients non finis : {any(not torch.isfinite(p.grad).all() for p in m.parameters() if p.grad is not None)}")
+    t = time.perf_counter()
+    for _ in range(3):
+        m.zero_grad()
+        m(x, y)[1].backward()
+    print(f"Pas forward+backward (batch 2x{seq}) : {(time.perf_counter() - t) / 3 * 1000:.0f} ms sur {device}")
 
 
-def inspect_all_presets():
-    """Tableau comparatif de tous les presets."""
-    print_separator()
-    print("  MiniLLM v2 — Comparatif des tailles")
-    print_separator()
-    print(f"  {'Size':>6} | {'Params':>8} | {'Layers':>6} | {'d_model':>7} | "
-          f"{'Heads':>5} | {'KV':>3} | {'FFN':>5} | {'Ctx':>5}")
-    print("  " + "─" * 58)
-
-    for size, cfg in PRESETS.items():
-        n = cfg.count_params()
-        unit = "M" if n >= 1e6 else "K"
-        val  = n/1e6 if n >= 1e6 else n/1e3
-        print(f"  {size:>6} | {val:>6.1f}{unit} | {cfg.n_layers:>6} | "
-              f"{cfg.d_model:>7} | {cfg.n_heads:>5} | {cfg.kv_heads:>3} | "
-              f"{cfg.ffn_hidden:>5} | {cfg.max_seq_len:>5}")
-
-    print_separator()
-    print()
-
-
-def inspect_checkpoint(path: str):
-    """Affiche les infos d'un checkpoint sauvegardé."""
-    import os
-    assert os.path.exists(path), f"Checkpoint introuvable : {path}"
-
-    ckpt = torch.load(path, map_location="cpu", weights_only=False)
-    cfg  = ckpt["config"]
-
-    print_separator()
-    print(f"  Checkpoint : {path}")
-    print_separator()
-    print(f"  Iteration  : {ckpt.get('iter', '?')}")
-    print(f"  Val loss   : {ckpt.get('val_loss', '?')}")
-    print(f"  Config     : {cfg}")
-    print()
-
-    # Charger et vérifier
-    model = MiniLLM(cfg)
-    state = {k.replace("_orig_mod.", ""): v for k, v in ckpt["model"].items()}
-    model.load_state_dict(state)
-    print(f"  Paramètres : {model.n_params/1e6:.2f}M")
-    print(f"  ✓ Checkpoint valide")
-    print_separator()
-    print()
+def describe(path: str):
+    ck = load_checkpoint(path)
+    cfg = ModelConfig.from_dict(ck["config"])
+    print(f"{path}\n  modèle {cfg.size_name()} ({cfg.count_params():,} params) | vocab {cfg.vocab_size} | ctx {cfg.max_seq_len}")
+    for k in ("iter", "val_loss", "best_val_loss", "tokens_seen"):
+        if k in ck:
+            print(f"  {k}: {ck[k]}")
+    tc = ck.get("train_config", {})
+    if tc:
+        print(f"  mode: {tc.get('mode')} | lr {tc.get('lr')} | batch {tc.get('batch_size')}x{tc.get('grad_accum')}")
 
 
 if __name__ == "__main__":
-    p = argparse.ArgumentParser(description="MiniLLM v2 — Inspection du modèle")
-    p.add_argument("--size",       default=None, choices=list(PRESETS),
-                   help="Inspecter un preset spécifique")
-    p.add_argument("--checkpoint", default=None,
-                   help="Inspecter un fichier checkpoint .pt")
-    args = p.parse_args()
-
-    if args.checkpoint:
-        inspect_checkpoint(args.checkpoint)
-    elif args.size:
-        inspect_preset(args.size)
-    else:
-        inspect_all_presets()
-        inspect_preset("50M")
+    p = argparse.ArgumentParser()
+    p.add_argument("--size", default=None)
+    p.add_argument("--seq", type=int, default=128)
+    p.add_argument("--ckpt", default=None)
+    p.add_argument("--device", default="cpu")
+    a = p.parse_args()
+    table()
+    if a.size:
+        check(a.size, a.seq, a.device)
+    if a.ckpt:
+        describe(a.ckpt)

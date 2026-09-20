@@ -1,259 +1,133 @@
-# MiniLLM v2 — DevLab
+# 🧠 MiniLLM v2
 
-Transformer decoder-only optimisé, scalable de **15M à 1B paramètres**,  
-conçu pour être entraîné sur un seul GPU grand public.
+Un petit LLM **français** entraîné *from scratch* (Transformer décodeur : RMSNorm · RoPE · SwiGLU · GQA · QK-norm),
+pensé pour être entraîné sur **Kaggle / Colab (T4)** et même pilotable depuis un téléphone.
 
-## Architecture
-
-| Composant | Choix | Avantage |
-|---|---|---|
-| Positional embeddings | **RoPE** | Extrapolation longueur, 0 params |
-| Normalisation | **RMSNorm** | ~10% plus rapide que LayerNorm |
-| Activation FFN | **SwiGLU** | Surpasse GELU empiriquement |
-| Attention | **GQA** (configurable) | Réduit le KV cache à grande échelle |
-| Flash Attention | **Oui** (PyTorch 2.0+) | Intégré, sans lib externe |
-| Biais linéaires | **Non** | Standard moderne (LLaMA, Gemma) |
-| Precision | **bfloat16** | Plus stable que float16 |
-
-## Tailles disponibles
-
-| Preset | Params | Layers | d_model | Heads | KV heads |
-|--------|--------|--------|---------|-------|----------|
-| 15M    | ~15M   | 6      | 384     | 6     | 6 (MHA)  |
-| 50M    | ~50M   | 10     | 512     | 8     | 8 (MHA)  |
-| 125M   | ~125M  | 12     | 768     | 12    | 12 (MHA) |
-| 350M   | ~350M  | 24     | 1024    | 16    | 8 (GQA)  |
-| 1B     | ~1B    | 20     | 2048    | 16    | 4 (GQA)  |
+> **Attentes réalistes.** Avec ~1 milliard de tokens sur un GPU T4, ce modèle apprend à écrire du français court et
+> plausible, et — après le fine-tuning — à **répondre en phrases complètes à des questions simples** (identité,
+> salutations, capitales, calendrier, contraires, petites opérations…) et à dire « je ne sais pas » quand il ne peut pas
+> savoir. Ce n'est pas un assistant généraliste : hors de ce qu'il a vu, il inventera. C'est normal pour un modèle de cette taille.
 
 ---
 
-## Installation
+## Démarrage rapide
 
+**Notebook (le plus simple)** — ouvre `MiniLLM_v2.ipynb` sur Kaggle ou Colab (GPU activé) et exécute les cellules *dans l'ordre, une par une*.
+Chaque cellule d'entraînement **reprend seule** après une coupure.
+
+**Ligne de commande**
 ```bash
-# 1. Cloner / copier le projet
-cd minillm_v2
-
-# 2. Installer les dépendances
 pip install -r requirements.txt
+python smoke_test.py                                   # 2 min, CPU, sans internet : vérifie tout le pipeline
 
-# Pour GPU CUDA (remplace la ligne torch dans requirements.txt) :
-pip install torch --index-url https://download.pytorch.org/whl/cu121
+# 1. données (Wikipédia FR nettoyé + web FR) -> tokenizer 32k -> binaires
+python prepare_data.py all --out data --wiki_docs 250000 --web_docs 300000
+
+# 2. pré-entraînement  (2 GPU : remplacer "python" par "torchrun --standalone --nproc_per_node=2")
+python train.py --mode pretrain --data_dir data/pretrain --out_dir checkpoints/pretrain --model_size 49M \
+                --max_iters 10000 --batch_size 16 --grad_accum 8
+
+# 3. questions -> réponses
+python sft_data.py --tokenizer data/tokenizer.json --out data/sft
+python train.py --mode sft --data_dir data/sft --out_dir checkpoints/sft --init_from checkpoints/pretrain/best.pt
+
+# 4. discuter / évaluer
+python generate.py --ckpt checkpoints/sft/best.pt --mode chat
+python evaluate.py qa --ckpt checkpoints/sft/best.pt --sft_dir data/sft
 ```
+100 % hors-ligne possible : `prepare_data.py all --wiki_docs 0 --local_txt mes_textes/*.txt`.
 
 ---
 
-## Utilisation
+## Presets (les noms sont le **vrai** nombre de paramètres, calculé automatiquement)
 
-### Étape 1 — Préparer les données
+| preset | couches | d_model | têtes (Q/KV) | contexte | paramètres totaux | dont hors embeddings |
+|---|---|---|---|---|---|---|
+| **13M** | 6 | 256 | 4/4 | 512 | 13,012,992 | 4,820,992 |
+| **23M** | 6 | 384 | 6/6 | 512 | 22,910,592 | 10,622,592 |
+| **49M** | 10 | 512 | 8/8 | 512 | 48,508,672 | 32,124,672 |
+| **110M** | 12 | 768 | 12/12 | 1024 | 109,531,392 | 84,955,392 |
+| **311M** | 24 | 1024 | 16/8 | 2048 | 311,218,176 | 278,450,176 |
+| **952M** | 20 | 2048 | 16/4 | 2048 | 951,671,808 | 886,135,808 |
 
-Le modèle s'entraîne sur un fichier texte plain (`.txt`).  
-Plus il y a de texte, mieux c'est. Minimum recommandé : **50M tokens** (~40MB de texte).
-
-```bash
-# Depuis un seul fichier
-python prepare_data.py mon_corpus.txt
-
-# Depuis un dossier de fichiers .txt
-python prepare_data.py dossier_textes/
-
-# Avec options avancées
-python prepare_data.py corpus.txt --out data/ --val_ratio 0.02
-```
-
-Cela crée :
-```
-data/
-├── train.bin   ← données d'entraînement (uint16)
-├── val.bin     ← données de validation
-└── meta.json   ← métadonnées
-```
-
-**Sources de corpus recommandées :**
-- Texte français : [CulturaX](https://huggingface.co/datasets/uonlp/CulturaX), [mC4](https://huggingface.co/datasets/mc4), Wikipedia FR
-- Vos propres données, articles, livres, etc.
-- Pour le Fulfulde : exporter les données du projet Tardigrade
-
-### Étape 2 — Vérifier le modèle
-
-Avant de lancer un long entraînement, vérifier que tout est correct :
-
-```bash
-# Tableau comparatif de tous les presets
-python inspect_model.py
-
-# Détails du modèle 50M (test forward pass inclus)
-python inspect_model.py --size 50M
-```
-
-### Étape 3 — Entraîner
-
-```bash
-# Entraînement avec le preset 50M (défaut)
-python train.py
-
-# Choisir une taille différente
-python train.py --size 15M          # plus rapide, pour tester
-python train.py --size 125M         # plus puissant, nécessite plus de VRAM
-
-# Options avancées
-python train.py \
-    --size 50M \
-    --seq 1024 \
-    --batch 8 \
-    --accum 8 \
-    --iters 50000 \
-    --lr 3e-4 \
-    --out checkpoints/
-
-# Reprendre un entraînement interrompu
-python train.py --resume checkpoints/best.pt
-```
-
-**Paramètres importants :**
-
-| Paramètre | Défaut | Description |
-|-----------|--------|-------------|
-| `--size`  | `50M`  | Taille du modèle |
-| `--batch` | `8`    | Micro-batch par GPU (réduire si OOM) |
-| `--accum` | `8`    | Accumulation gradient (batch effectif = batch × accum) |
-| `--seq`   | `1024` | Longueur de séquence |
-| `--iters` | `50000`| Itérations totales |
-| `--lr`    | `3e-4` | Learning rate max (cosine decay) |
-
-**Si mémoire insuffisante (OOM) :**
-```bash
-# Réduire le batch et augmenter l'accumulation (batch effectif identique)
-python train.py --batch 4 --accum 16
-
-# Désactiver la compilation
-python train.py --no-compile
-
-# Réduire la longueur de séquence
-python train.py --seq 512
-```
-
-### Étape 4 — Générer du texte
-
-```bash
-# Mode interactif (prompt dans le terminal)
-python generate.py
-
-# Avec un prompt fourni en argument
-python generate.py --prompt "Il était une fois"
-
-# Régler le style de génération
-python generate.py \
-    --prompt "Le modèle de langue" \
-    --temp 0.7 \
-    --top_k 40 \
-    --max_new 300
-
-# Depuis un checkpoint spécifique
-python generate.py \
-    --checkpoint checkpoints/ckpt_010000.pt \
-    --prompt "Bonjour"
-```
-
-**Paramètres de génération :**
-
-| Paramètre | Défaut | Effet |
-|-----------|--------|-------|
-| `--temp`  | `0.8`  | < 1 = conservateur, > 1 = créatif |
-| `--top_k` | `50`   | 0 = désactivé (greedy) |
-| `--top_p` | `0.95` | Nucleus sampling (1.0 = désactivé) |
-| `--max_new` | `200` | Nombre max de tokens générés |
-| `--samples` | `1`  | Nombre de générations (avec --prompt) |
+Chiffres pour un vocabulaire de 32 000 tokens. (Avec l'ancien tokenizer de 100 277 tokens les mêmes architectures
+faisaient 49M / 83M / 162M / 381M / 1 091M : les embeddings pesaient 62 % du plus petit modèle.)
+`python inspect_model.py` affiche le tableau, la mémoire estimée et vérifie qu'un modèle est sain.
 
 ---
 
-## Structure du projet
+## Fichiers
 
-```
-minillm_v2/
-├── config.py         ← Configuration et presets (modifier ici)
-├── model.py          ← Architecture complète (RoPE, RMSNorm, SwiGLU, GQA)
-├── train.py          ← Boucle d'entraînement
-├── generate.py       ← Génération de texte
-├── prepare_data.py   ← Préparation du corpus
-├── inspect_model.py  ← Inspection et diagnostics
-├── requirements.txt  ← Dépendances Python
-└── README.md         ← Ce fichier
-```
-
----
-
-## Scaling vers 1B paramètres
-
-L'architecture est conçue pour scaler sans modifier le code.  
-Seule la configuration change :
-
-```python
-# Dans config.py, les presets "350M" et "1B" sont déjà définis.
-# Pour entraîner un 1B :
-python train.py --size 1B --batch 2 --accum 32 --seq 2048
-```
-
-**Prérequis matériels approximatifs :**
-
-| Taille | VRAM GPU | Temps (RTX 3090, 1B tokens) |
-|--------|----------|------------------------------|
-| 15M    | 2 GB     | ~2 heures                    |
-| 50M    | 4 GB     | ~4 heures                    |
-| 125M   | 8 GB     | ~10 heures                   |
-| 350M   | 24 GB    | ~30 heures                   |
-| 1B     | 80 GB    | ~plusieurs jours (multi-GPU) |
+| fichier | rôle |
+|---|---|
+| `config.py` | `ModelConfig`, presets nommés d'après leur taille réelle, `TrainConfig` (pré-entraînement **et** SFT) |
+| `model.py` | Transformer : RoPE réel, QK-norm, GQA, **KV-cache**, loss masquée (`-1` ignoré) |
+| `mini_tokenizer.py` | BPE 32k byte-level (chiffres isolés, apostrophes françaises) + **template de chat** |
+| `text_cleaning.py` | nettoyage Wikipédia (phrases trouées, sections de fin, titres) |
+| `prepare_data.py` | corpus → tokenizer → `train.bin` / `val.bin` (split **par document**, `<|endoftext|>` entre documents) |
+| `synthetic_qa.py` | ~2 000 Q/R propres générées par code (faits sûrs, arithmétique calculée) |
+| `sft_data.py` | jeu SFT : synthétique + French-Alpaca + OpenAssistant FR + PIAF ; masque de loss |
+| `data.py` | loaders **déterministes** : val fixe, époques sans remise, SFT groupé par longueur |
+| `checkpoint.py` | sauvegardes atomiques, `best`/`final`/reprise, nettoyage numérique |
+| `train.py` | boucle unique (pretrain + SFT), DDP, budget temps, log JSONL |
+| `generate.py` | génération avec KV-cache, chat au bon template, streaming, anti-répétition |
+| `evaluate.py` | perplexité (val fixe), Exact-Match / F1, prompts de démonstration |
+| `inspect_model.py` · `smoke_test.py` · `tests/` | vérifications |
+| `push_to_github.py` | pousse le projet via l'API GitHub (token par variable d'environnement) |
 
 ---
 
-## Personnalisation
+## Ce qui rend l'entraînement fiable
 
-### Modifier l'architecture
+**Meilleur modèle (`best.pt`)** — la `val_loss` est mesurée sur des séquences **toujours identiques** (espacées dans `val.bin`),
+donc comparable d'une évaluation à l'autre. La meilleure valeur est écrite dans `best.json` et **relue à la reprise** :
+un run repris ne peut plus écraser un meilleur modèle. En SFT la val_loss ne porte que sur les réponses.
 
-Tout se passe dans `config.py` :
+**Reprise** — `ckpt_XXXXXXX.pt` contient tout (modèle, optimiseur, GradScaler, itération, best, tokens vus) ; l'ordre des
+données est une fonction de `(seed, numéro de batch)`, donc on repart exactement là où on s'est arrêté (test automatisé :
+20 itérations d'un coup = 10 + reprise + 10, mêmes poids). Les écritures sont atomiques (fichier temporaire + `os.replace`).
+`--max_minutes` sauvegarde et s'arrête proprement avant la fin d'une session.
 
-```python
-# Exemple : modèle custom avec contexte plus long
-from config import ModelConfig
+**Fichiers produits dans `out_dir`** : `best.pt` (poids, léger) · `final.pt` (dernière it.) · `ckpt_*.pt` (état complet, 2 gardés)
+· `best.json` · `log.jsonl` (courbes) · `tokenizer.json` (copié : checkpoint et tokenizer voyagent ensemble).
 
-mon_modele = ModelConfig(
-    n_layers    = 12,
-    d_model     = 768,
-    n_heads     = 12,
-    kv_heads    = 4,      # GQA : 3× moins de KV cache
-    max_seq_len = 4096,   # contexte plus long
-    rope_theta  = 50_000, # RoPE adapté aux longues séquences
-)
-```
+**Précision** — `auto` : bf16 seulement sur GPU Ampere+ ; sinon fp16 + GradScaler (T4/P100). Jamais de bf16 émulé.
 
-### Entraîner un tokenizer custom (Fulfulde + Français)
+**Fine-tuning** — template `<|user|>…<|end|><|assistant|>…<|end|>`, loss **uniquement sur la réponse**, exemples
+jamais tronqués, batchs regroupés par longueur (padding à droite : sans effet grâce au masque causal), 3 époques max avec
+early stopping, optimiseur neuf (`--init_from` charge les poids seulement).
+
+**Génération** — KV-cache (≈ 6× plus rapide que l'ancien recalcul complet dès 200 tokens, mesuré sur CPU ; l'écart grandit avec la
+longueur), arrêt sur `<|end|>`, jamais de token de rôle dans la réponse, pénalité de répétition + interdiction des trigrammes
+répétés **appliquées au texte généré uniquement** (pas de blocage quand on recopie le contexte).
+
+---
+
+## Réglages utiles
+
+| envie | option |
+|---|---|
+| plus de tokens/s | 2 GPU (`torchrun`), `--compile` (à tester), `--batch_size` maximal qui tient en mémoire |
+| out of memory | `--batch_size 8` (monte `--grad_accum` pour garder le batch effectif) |
+| entraînement interruptible à durée libre | `--schedule wsd` (warmup–stable–decay) : le LR reste haut puis décroît sur les `--decay_frac` derniers % |
+| modèle plus petit / plus rapide | `--model_size 23M` (LR 1e-3) |
+| réponses plus « sages » | `--temperature 0.3` dans `generate.py` |
+| tes propres Q/R | `sft_data.py --extra_jsonl mes_qr.jsonl` (lignes `{"question":…,"answer":…}` ou `{"messages":[…]}`) |
+
+---
+
+## Tests
 
 ```bash
-pip install sentencepiece datasets
-
-# Après avoir collecté votre corpus
-python -c "
-import sentencepiece as spm
-spm.SentencePieceTrainer.train(
-    input='corpus_fuv_fra.txt',
-    model_prefix='tokenizer/fuv_fra',
-    vocab_size=32000,
-    character_coverage=0.9999,
-    model_type='bpe',
-)
-"
+python -m pytest -q          # 27 tests, CPU, ~15 s : KV-cache = forward complet, nombre de paramètres exact, masque de loss,
+                             # nettoyage, tokenizer, loaders, reprise exacte, best jamais écrasé, DDP 2 processus…
+python smoke_test.py         # pipeline complet sur un mini modèle
 ```
 
-Puis adapter `vocab_size` dans `ModelConfig` et remplacer `tiktoken` par
-votre tokenizer SentencePiece dans `prepare_data.py` et `generate.py`.
+## Limites connues
 
----
-
-## Références
-
-- [Gemma (Google, 2024)](https://arxiv.org/abs/2403.08295) — RMSNorm, SwiGLU, RoPE, GQA
-- [RoPE (Su et al., 2021)](https://arxiv.org/abs/2104.09864) — Rotary Positional Embeddings  
-- [SwiGLU (Shazeer, 2020)](https://arxiv.org/abs/2002.05202) — Activation GLU
-- [GQA (Ainslie et al., 2023)](https://arxiv.org/abs/2305.13245) — Grouped Query Attention
-- [Flash Attention (Dao et al., 2022)](https://arxiv.org/abs/2205.14135) — Attention efficace
-- [nanoGPT](https://github.com/karpathy/nanoGPT) / [nanochat](https://github.com/karpathy/nanochat) — Inspiration codebase
-- [GPT-NeoX](https://github.com/EleutherAI/gpt-neox) — Pipeline open source LLM
+* Le code d'entraînement a été validé sur **CPU** (tests, DDP en gloo, mini-entraînement Q/R de bout en bout). Les performances GPU
+  (tok/s, mémoire) doivent être lues dans les logs de ta session : la 1re fois, regarde le `k tok/s` affiché.
+* Les chargeurs de datasets HuggingFace (Wikipédia, FineWeb-2, French-Alpaca, OpenAssistant, PIAF) ne peuvent pas être testés hors-ligne :
+  chacun est protégé (`try/except`) et le SFT continue avec les sources restantes s'il change de format.
+* Les Q/R synthétiques donnent la *forme* d'une conversation, pas de la connaissance ; les réponses arithmétiques d'un très petit modèle restent fragiles.
