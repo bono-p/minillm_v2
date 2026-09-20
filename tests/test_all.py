@@ -364,3 +364,55 @@ def test_sampling_filters():
     draws = {sample_token(logits, [], **{**kw, "valid_vocab": 3}, rng=g) for _ in range(200)}
     assert draws <= {0, 1, 2}                                                                    # lignes de padding jamais tirées
     assert sample_token(logits, [0, 0, 0], **{**kw, "temperature": 0.0, "repetition_penalty": 10.0}, rng=g) == 1   # pénalité de répétition
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Personnalité
+# ══════════════════════════════════════════════════════════════════════════════
+def test_persona_file_is_valid():
+    path = os.path.join(ROOT, "personnalite.jsonl")
+    rows = [json.loads(l) for l in open(path, encoding="utf-8") if l.strip()]
+    assert 1 <= len(rows) <= 30
+    qs = [r["question"] for r in rows]
+    assert len(set(qs)) == len(qs)                                          # pas de question en double
+    assert all(r["question"].strip() and r["answer"].strip() and "<|" not in r["question"] + r["answer"] for r in rows)
+    assert any("MiniLLM" in r["answer"] for r in rows) and any("DevLab" in r["answer"] for r in rows)
+
+
+def test_identity_filter_drops_contradicting_examples():
+    from sft_data import contradicts_persona
+    assert contradicts_persona("Qui es-tu ?", "Je suis un assistant.")
+    assert contradicts_persona("Écris un poème.", "En tant qu'IA, je ne peux pas ressentir d'émotions.")
+    assert contradicts_persona("Ça vient d'où ?", "Je suis ChatGPT, développé par OpenAI.")
+    assert not contradicts_persona("Comment faire une omelette ?", "Casse deux œufs et bats-les avec du sel.")
+
+
+def test_persona_goes_to_train_only_and_is_repeated(tok_and_data, tmp_path):
+    import sft_data
+    from data import SFTData
+    tok, data = tok_and_data
+    out = str(tmp_path / "sft")
+    persona = os.path.join(ROOT, "personnalite.jsonl")
+    n = sum(1 for l in open(persona, encoding="utf-8") if l.strip())
+    meta = sft_data.build_sft(os.path.join(data, "tokenizer.json"), out, alpaca=0, piaf=0, oasst=0, synthetic_repeat=1,
+                              max_len=200, val_permille=100, persona=persona, persona_repeat=5)
+    assert meta["sources"]["persona (x5)"] == n
+    q0 = "Dis-moi qui tu es."
+    def count(split):
+        d = SFTData(out, split, batch_size=2, pad_id=tok.pad_id)
+        c = 0
+        for i in range(d.n):
+            ids = [int(t) for t in d.tokens[d.offsets[i]:d.offsets[i + 1]]]
+            c += q0 in tok.decode(ids)
+        return c
+    assert count("train") == 5 and count("val") == 0
+
+
+def test_push_script_includes_the_persona_file():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("pg", os.path.join(ROOT, "push_to_github.py"))
+    pg = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(pg)
+    files = pg.collect_files(ROOT)
+    assert "personnalite.jsonl" in files and "MiniLLM_v2.ipynb" in files and "tests/test_all.py" in files
+    assert not any(f.startswith(("data/", "checkpoints/")) for f in files)

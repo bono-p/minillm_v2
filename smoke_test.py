@@ -64,10 +64,11 @@ def run_pipeline(work: str, verbose: bool = True) -> dict:
     r2 = train.train(TrainConfig(mode="pretrain", max_iters=40, **common))
     assert r2["iter"] == 40, r2
 
-    say("\n▶ 4/6 données SFT (synthétiques uniquement, hors-ligne)")
+    say("\n▶ 4/6 données SFT (synthétiques + personnalité, hors-ligne)")
     sft_dir = os.path.join(data, "sft")
+    persona = os.path.join(os.path.dirname(os.path.abspath(__file__)), "personnalite.jsonl")
     sft_data.build_sft(os.path.join(data, "tokenizer.json"), sft_dir, alpaca=0, piaf=0, oasst=0,
-                       synthetic_repeat=1, max_len=127, val_permille=50)
+                       synthetic_repeat=1, max_len=127, val_permille=50, persona=persona, persona_repeat=2)
 
     say("\n▶ 5/6 SFT (tiny) 1 époque")
     sft_out = os.path.join(work, "ckpt_sft")

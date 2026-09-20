@@ -24,7 +24,7 @@ import urllib.parse
 import urllib.request
 from typing import List, Optional
 
-INCLUDE_EXT = {".py", ".md", ".txt", ".ipynb", ".json"}
+INCLUDE_EXT = {".py", ".md", ".txt", ".ipynb", ".json", ".jsonl"}
 INCLUDE_NAMES = {".gitignore"}
 SKIP_DIRS = {".git", "__pycache__", "data", "checkpoints", ".pytest_cache", "runs", "outputs"}
 OLD_FILES = ["MiniLLM_v2_DevLab.ipynb", "MiniLLM_v2_Kaggle.ipynb"]      # remplacés par MiniLLM_v2.ipynb

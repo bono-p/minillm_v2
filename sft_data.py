@@ -14,6 +14,9 @@ et on continue avec les autres.
 
 Exemple :
   python sft_data.py --tokenizer data/tokenizer.json --out data/sft --alpaca 30000 --piaf 2000 --oasst 3000
+
+Personnalité : `personnalite.jsonl` (≤ 30 Q/R sur le modèle lui-même) est ajouté automatiquement, toujours en train,
+répété --persona_repeat fois. Modifie ce fichier puis reconstruis le SFT (supprime data/sft) et ré-entraîne.
 """
 from __future__ import annotations
 
@@ -45,6 +48,24 @@ def _first(row: dict, *keys: str) -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  Cohérence de personnalité : on écarte des sources externes tout ce qui contredit "je suis MiniLLM, créé par DevLab"
+# ══════════════════════════════════════════════════════════════════════════════
+_IDENTITY_Q = ("qui es-tu", "qui êtes-vous", "tu es qui", "comment t'appelles", "comment vous appelez", "ton nom",
+               "ton prénom", "qui t'a créé", "qui t'a conçu", "es-tu un", "es-tu une", "présente-toi", "présentez-vous")
+_IDENTITY_A = ("openai", "chatgpt", "gpt-3", "gpt-4", "en tant qu'ia", "en tant qu'intelligence artificielle",
+               "en tant que modèle de langage", "en tant qu'assistant", "en tant qu'ai", "je suis une ia",
+               "je suis une intelligence artificielle", "je suis un assistant", "assistant virtuel",
+               "open assistant", "open-assistant", "laion")
+
+
+def contradicts_persona(question: str, answer: str) -> bool:
+    """Vrai si l'exemple parle de l'identité de l'assistant (ChatGPT, OpenAI, 'en tant qu'IA'...) : il brouillerait la personnalité."""
+    q = question.lower().replace("’", "'")
+    a = answer.lower().replace("’", "'")
+    return any(k in q for k in _IDENTITY_Q) or any(k in a for k in _IDENTITY_A)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  Sources externes (HuggingFace)
 # ══════════════════════════════════════════════════════════════════════════════
 def load_french_alpaca(max_examples: int, max_answer_chars: int = 350, max_question_chars: int = 300, seed: int = 0) -> List[Conv]:
@@ -62,7 +83,7 @@ def load_french_alpaca(max_examples: int, max_answer_chars: int = 350, max_quest
         q = instr if not inp else f"{instr}\n\n{inp}"
         if len(q) > max_question_chars or not (3 <= len(ans) <= max_answer_chars):
             continue                                    # un tout petit modèle apprend mieux sur des réponses COURTES
-        if "###" in ans or "http" in ans:
+        if "###" in ans or "http" in ans or contradicts_persona(q, ans):
             continue
         out.append(_conv(q, ans))
         if len(out) >= max_examples:
@@ -121,7 +142,7 @@ def load_oasst_fr(max_examples: int, max_answer_chars: int = 500, seed: int = 0)
         if not parent or parent["role"] != "prompter":
             continue
         q, a = parent["text"].strip(), r["text"].strip()
-        if len(q) > 400 or not (3 <= len(a) <= max_answer_chars):
+        if len(q) > 400 or not (3 <= len(a) <= max_answer_chars) or contradicts_persona(q, a):
             continue
         out.append(_conv(q, a))
     np.random.default_rng(seed).shuffle(out)
@@ -158,7 +179,7 @@ def _safe(name: str, fn, *args, **kwargs) -> List[Conv]:
 
 def build_sft(tokenizer_path: str, out_dir: str, alpaca: int = 30_000, piaf: int = 2_000, oasst: int = 3_000,
               synthetic_repeat: int = 2, extra_jsonl: Optional[List[str]] = None, max_len: int = 512,
-              val_permille: int = 20, seed: int = 0) -> dict:
+              val_permille: int = 20, seed: int = 0, persona: Optional[str] = None, persona_repeat: int = 20) -> dict:
     tok = MiniTokenizer(tokenizer_path)
     os.makedirs(out_dir, exist_ok=True)
     print("Sources :")
@@ -173,6 +194,8 @@ def build_sft(tokenizer_path: str, out_dir: str, alpaca: int = 30_000, piaf: int
         sources["piaf"] = _safe("piaf", load_piaf, piaf, seed=seed)
     for p in extra_jsonl or []:
         sources[f"jsonl:{os.path.basename(p)}"] = _safe(p, load_jsonl, p)
+
+    persona_convs: List[Conv] = _safe("persona", load_jsonl, persona) if persona else []
 
     dtype = np.uint16 if tok.padded_vocab_size <= 65_535 else np.uint32
     splits: Dict[str, List[Tuple[List[int], List[int]]]] = {"train": [], "val": []}
@@ -193,6 +216,17 @@ def build_sft(tokenizer_path: str, out_dir: str, alpaca: int = 30_000, piaf: int
         moved = splits["train"][::step]
         splits["val"] += moved
         splits["train"] = [e for i, e in enumerate(splits["train"]) if i % step != 0]
+    # Personnalité : TOUJOURS dans train (jamais en val), répétée persona_repeat fois pour peser face aux ~30 000 autres exemples
+    n_persona = 0
+    for conv in persona_convs:
+        ids, mask = tok.encode_chat(conv["messages"])
+        if len(ids) > max_len + 1 or sum(mask) == 0:
+            print(f"  ⚠️  persona ignoré (trop long) : {conv['messages'][0]['content'][:60]}")
+            continue
+        splits["train"] += [(ids, mask)] * persona_repeat
+        n_persona += 1
+    if n_persona:
+        per_source[f"persona (x{persona_repeat})"] = n_persona
     rng = np.random.default_rng(seed)
     for s in splits:
         order = rng.permutation(len(splits[s]))
@@ -227,9 +261,13 @@ def main():
     p.add_argument("--max_len", type=int, default=512)
     p.add_argument("--val_permille", type=int, default=20)
     p.add_argument("--seed", type=int, default=0)
+    default_persona = os.path.join(os.path.dirname(os.path.abspath(__file__)), "personnalite.jsonl")
+    p.add_argument("--persona", default=default_persona if os.path.exists(default_persona) else "",
+                   help="fichier .jsonl de Q/R sur le modèle lui-même (personnalité) ; \"\" pour désactiver")
+    p.add_argument("--persona_repeat", type=int, default=20, help="nb de copies de chaque Q/R de personnalité dans train")
     a = p.parse_args()
     build_sft(a.tokenizer, a.out, a.alpaca, a.piaf, a.oasst, a.synthetic_repeat, a.extra_jsonl, a.max_len,
-              a.val_permille, a.seed)
+              a.val_permille, a.seed, a.persona or None, a.persona_repeat)
 
 
 if __name__ == "__main__":

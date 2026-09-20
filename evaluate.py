@@ -29,7 +29,7 @@ from data import PretrainData
 from generate import chat_reply, load_model, stream_tokens
 
 DEMO_PROMPTS = [
-    "Bonjour", "Qui es-tu ?", "Quelle est la capitale du Cameroun ?", "Combien font 12 plus 7 ?",
+    "Bonjour", "Qui es-tu ?", "Comment tu t'appelles ?", "Qui t'a créé ?", "Quelle est la capitale du Cameroun ?", "Combien font 12 plus 7 ?",
     "Quel jour vient après le mardi ?", "Quel est le contraire de grand ?", "Combien de jours y a-t-il dans une semaine ?",
     "Quel temps fera-t-il demain ?", "Explique ce qu'est la photosynthèse.", "Raconte-moi une blague.",
 ]

@@ -28,7 +28,7 @@ python train.py --mode pretrain --data_dir data/pretrain --out_dir checkpoints/p
                 --max_iters 10000 --batch_size 16 --grad_accum 8
 
 # 3. questions -> réponses
-python sft_data.py --tokenizer data/tokenizer.json --out data/sft
+python sft_data.py --tokenizer data/tokenizer.json --out data/sft     # ajoute automatiquement personnalite.jsonl
 python train.py --mode sft --data_dir data/sft --out_dir checkpoints/sft --init_from checkpoints/pretrain/best.pt
 
 # 4. discuter / évaluer
@@ -66,7 +66,8 @@ faisaient 49M / 83M / 162M / 381M / 1 091M : les embeddings pesaient 62 % du plu
 | `text_cleaning.py` | nettoyage Wikipédia (phrases trouées, sections de fin, titres) |
 | `prepare_data.py` | corpus → tokenizer → `train.bin` / `val.bin` (split **par document**, `<|endoftext|>` entre documents) |
 | `synthetic_qa.py` | ~2 000 Q/R propres générées par code (faits sûrs, arithmétique calculée) |
-| `sft_data.py` | jeu SFT : synthétique + French-Alpaca + OpenAssistant FR + PIAF ; masque de loss |
+| `personnalite.jsonl` | **≤ 30 Q/R sur le modèle lui-même** (nom, créateur, caractère) — à éditer librement |
+| `sft_data.py` | jeu SFT : synthétique + French-Alpaca + OpenAssistant FR + PIAF + personnalité ; masque de loss ; filtre d'identité |
 | `data.py` | loaders **déterministes** : val fixe, époques sans remise, SFT groupé par longueur |
 | `checkpoint.py` | sauvegardes atomiques, `best`/`final`/reprise, nettoyage numérique |
 | `train.py` | boucle unique (pretrain + SFT), DDP, budget temps, log JSONL |
@@ -93,6 +94,10 @@ données est une fonction de `(seed, numéro de batch)`, donc on repart exacteme
 
 **Précision** — `auto` : bf16 seulement sur GPU Ampere+ ; sinon fp16 + GradScaler (T4/P100). Jamais de bf16 émulé.
 
+**Personnalité** — `personnalite.jsonl` (≤ 30 Q/R : « Comment tu t'appelles ? » → « Je suis MiniLLM… ») est ajouté au SFT, toujours en train
+(jamais en val) et répété 20 fois ; les exemples externes qui parlent de l'identité de l'assistant (« en tant qu'IA », ChatGPT…) sont écartés.
+Pas de system prompt : la personnalité vit dans les poids, le contexte reste libre pour la conversation.
+
 **Fine-tuning** — template `<|user|>…<|end|><|assistant|>…<|end|>`, loss **uniquement sur la réponse**, exemples
 jamais tronqués, batchs regroupés par longueur (padding à droite : sans effet grâce au masque causal), 3 époques max avec
 early stopping, optimiseur neuf (`--init_from` charge les poids seulement).
@@ -113,13 +118,14 @@ répétés **appliquées au texte généré uniquement** (pas de blocage quand o
 | modèle plus petit / plus rapide | `--model_size 23M` (LR 1e-3) |
 | réponses plus « sages » | `--temperature 0.3` dans `generate.py` |
 | tes propres Q/R | `sft_data.py --extra_jsonl mes_qr.jsonl` (lignes `{"question":…,"answer":…}` ou `{"messages":[…]}`) |
+| changer la personnalité | édite `personnalite.jsonl`, supprime `data/sft`, relance `sft_data.py` puis le SFT (pas de system prompt : la personnalité est dans les poids) |
 
 ---
 
 ## Tests
 
 ```bash
-python -m pytest -q          # 27 tests, CPU, ~15 s : KV-cache = forward complet, nombre de paramètres exact, masque de loss,
+python -m pytest -q          # 31 tests, CPU, ~1 min : KV-cache = forward complet, nombre de paramètres exact, masque de loss,
                              # nettoyage, tokenizer, loaders, reprise exacte, best jamais écrasé, DDP 2 processus…
 python smoke_test.py         # pipeline complet sur un mini modèle
 ```

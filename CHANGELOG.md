@@ -45,6 +45,12 @@ Chaque ligne relie un problème constaté à l'audit à sa correction et au fich
 | tok/s faux au 1er eval, test `model(x, x)` trompeur (loss 9,87 au lieu de 11,52) | tok/s mesuré entre deux logs ; sanity check avec cibles indépendantes | `train.py`, `inspect_model.py` |
 | `torch.load(weights_only=False)` + config picklée | Config en dict simple, `weights_only=True` (repli explicite avec avertissement pour les anciens fichiers) | `checkpoint.py` |
 
+## Personnalité
+
+* `personnalite.jsonl` (30 Q/R sur le modèle : nom, créateur, caractère) ajouté au SFT : toujours en train, répété 20 fois (`--persona`, `--persona_repeat`).
+* Les exemples French-Alpaca / OpenAssistant qui parlent de l'identité de l'assistant (« en tant qu'IA », ChatGPT, OpenAI…) sont écartés pour ne pas contredire la personnalité.
+* Pas de system prompt : sur un modèle de cette taille la personnalité s'apprend dans les poids et le contexte (512 tokens) reste pour la conversation.
+
 ## Hygiène
 
 * Deux notebooks divergents (DevLab / Kaggle, sorties et chemins mélangés) → **un seul** `MiniLLM_v2.ipynb`.
