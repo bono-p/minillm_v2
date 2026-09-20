@@ -13,7 +13,8 @@ pensé pour être entraîné sur **Kaggle / Colab (T4)** et même pilotable depu
 ## Démarrage rapide
 
 **Notebook (le plus simple)** — ouvre `MiniLLM_v2.ipynb` sur Kaggle ou Colab (GPU activé) et exécute les cellules *dans l'ordre, une par une*.
-Chaque cellule d'entraînement **reprend seule** après une coupure.
+Chaque cellule d'entraînement **reprend seule** après une coupure. Sur Colab, les données sont copiées automatiquement sur le disque local
+avant l'entraînement (Drive est trop lent pour les lectures aléatoires) ; seuls les checkpoints restent sur Drive.
 
 **Ligne de commande**
 ```bash
