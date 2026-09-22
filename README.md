@@ -126,7 +126,7 @@ répétés **appliquées au texte généré uniquement** (pas de blocage quand o
 ## Tests
 
 ```bash
-python -m pytest -q          # 31 tests, CPU, ~1 min : KV-cache = forward complet, nombre de paramètres exact, masque de loss,
+python -m pytest -q          # 33 tests, CPU, ~20 s : KV-cache = forward complet, nombre de paramètres exact, masque de loss,
                              # nettoyage, tokenizer, loaders, reprise exacte, best jamais écrasé, DDP 2 processus…
 python smoke_test.py         # pipeline complet sur un mini modèle
 ```
