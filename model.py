@@ -219,8 +219,10 @@ class MiniLLM(nn.Module):
             {"params": decay, "weight_decay": weight_decay},
             {"params": no_decay, "weight_decay": 0.0},
         ]
-        use_fused = device_type == "cuda"
+        # foreach (et non fused) : presque aussi rapide sur GPU, mais sans le format d'état interne de fused
+        # (compteur "step" en tenseur GPU) qui casse la reprise d'un optimiseur sauvegardé sur un autre device
+        # (ex. un run tombé sur CPU, repris ensuite sur GPU -> "Expected grad_scale and found_inf to be None").
         try:
-            return torch.optim.AdamW(groups, lr=lr, betas=betas, fused=use_fused)
+            return torch.optim.AdamW(groups, lr=lr, betas=betas, foreach=(device_type == "cuda"))
         except (RuntimeError, TypeError):
             return torch.optim.AdamW(groups, lr=lr, betas=betas)

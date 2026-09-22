@@ -305,7 +305,7 @@ répétitions au bout de quelques phrases, ne répond pas aux questions (normal 
 ## Tests
 
 ```bash
-python -m pytest -q          # 44 tests, CPU, ~1 min : KV-cache = forward complet, nombre de paramètres exact, masque de loss, nettoyage,
+python -m pytest -q          # 46 tests, CPU, ~20 s : KV-cache = forward complet, nombre de paramètres exact, masque de loss, nettoyage,
                              # tokenizer, loaders, reprise exacte, best jamais écrasé, DDP 2 processus, continuité 1↔2 GPU, RAG, outils Kaggle…
 python smoke_test.py         # pipeline complet sur un mini modèle (corpus local -> tokenizer -> pretrain -> reprise -> SFT -> génération)
 ```
