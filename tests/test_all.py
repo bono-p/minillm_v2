@@ -416,3 +416,32 @@ def test_push_script_includes_the_persona_file():
     files = pg.collect_files(ROOT)
     assert "personnalite.jsonl" in files and "MiniLLM_v2.ipynb" in files and "tests/test_all.py" in files
     assert not any(f.startswith(("data/", "checkpoints/")) for f in files)
+
+
+def test_configure_optimizers_does_not_request_fused():
+    """fused=True casse la reprise d'un optimiseur sauvegardé sur un autre device (compteur 'step' en tenseur GPU
+    incompatible avec un état venu du CPU) -> jamais demandé, quel que soit device_type."""
+    cfg = ModelConfig(vocab_size=50, n_layers=1, d_model=16, n_heads=2, kv_heads=2, max_seq_len=16)
+    m = MiniLLM(cfg)
+    for device_type in ("cpu", "cuda"):
+        opt = m.configure_optimizers(lr=1e-3, weight_decay=0.01, betas=(0.9, 0.95), device_type=device_type)
+        assert opt.defaults.get("fused") is not True, device_type
+
+
+def test_resume_realigns_optimizer_state_onto_the_current_device(tok_and_data, tmp_path):
+    """Reproduit le bug observé : un optimiseur repris est sauvegardé avec des tenseurs d'état 'ailleurs' (ex. un
+    run tombé sur CPU) ; la reprise doit les réaligner elle-même plutôt que planter au premier pas."""
+    import train
+    from checkpoint import latest_checkpoint
+    _, data = tok_and_data
+    out = str(tmp_path / "o")
+    train.train(_tiny_cfg(data, out, max_iters=5))
+    path = latest_checkpoint(out)
+    ck = torch.load(path, weights_only=True)
+    for state in ck["optimizer"]["state"].values():             # simule un état "étranger" (clones détachés, comme après un aller-retour disque)
+        for k, v in state.items():
+            if torch.is_tensor(v):
+                state[k] = v.clone().detach()
+    torch.save(ck, path)
+    r = train.train(_tiny_cfg(data, out, max_iters=10))          # ne doit pas lever d'AssertionError
+    assert r["iter"] == 10

@@ -190,6 +190,10 @@ def train(cfg: TrainConfig) -> dict:
     start_it, best_val, no_improve, tokens_seen = 0, float("inf"), 0, 0
     if ckpt is not None:
         optimizer.load_state_dict(ckpt["optimizer"])
+        for state in optimizer.state.values():          # aligne un état sauvegardé sur un autre device (ex. reprise CPU -> GPU)
+            for k, v in state.items():
+                if torch.is_tensor(v):
+                    state[k] = v.to(device)
         optimizer.param_groups[0]["weight_decay"] = cfg.weight_decay
         if ckpt.get("scaler") and scaler.is_enabled():
             scaler.load_state_dict(ckpt["scaler"])
