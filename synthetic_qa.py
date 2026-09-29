@@ -165,14 +165,14 @@ def _capital_examples(rng: random.Random) -> List[Dict]:
     a_tpl = ["La capitale {de} est {cap}.", "{cap} est la capitale {de}.", "La capitale {de} est {cap}."]
     for name, de, cap in CAPITALS:
         for q in rng.sample(q_tpl, 3):
-            out.append(_conv(q.format(de=de), rng.choice(a_tpl).format(de=de, cap=cap)))
+            out.append(_conv(q.format(de=de), rng.choice(a_tpl).format(de=de, cap=cap), "capitals"))
         # question inverse
-        out.append(_conv(f"{cap} est la capitale de quel pays ?", f"{cap} est la capitale {de}."))
+        out.append(_conv(f"{cap} est la capitale de quel pays ?", f"{cap} est la capitale {de}.", "capitals"))
     return out
 
 
-def _conv(q: str, a: str) -> Dict:
-    return {"messages": [{"role": "user", "content": q}, {"role": "assistant", "content": a}]}
+def _conv(q: str, a: str, category: str = "misc") -> Dict:
+    return {"messages": [{"role": "user", "content": q}, {"role": "assistant", "content": a}], "category": category}
 
 
 def _arithmetic_examples(rng: random.Random, n: int) -> List[Dict]:
@@ -195,7 +195,7 @@ def _arithmetic_examples(rng: random.Random, n: int) -> List[Dict]:
         else:
             q = f"Combien font {a} {sym} {b} ?"
             ans = f"{a} {sym} {b} = {r}."
-        out.append(_conv(q, ans))
+        out.append(_conv(q, ans, "arithmetic"))
     return out
 
 
@@ -203,32 +203,32 @@ def _calendar_examples(rng: random.Random) -> List[Dict]:
     out = []
     for i, d in enumerate(DAYS):
         nxt, prev = DAYS[(i + 1) % 7], DAYS[(i - 1) % 7]
-        out.append(_conv(f"Quel jour vient après le {d} ?", f"Après le {d}, c'est le {nxt}."))
-        out.append(_conv(f"Quel jour vient avant le {d} ?", f"Avant le {d}, c'est le {prev}."))
+        out.append(_conv(f"Quel jour vient après le {d} ?", f"Après le {d}, c'est le {nxt}.", "calendar"))
+        out.append(_conv(f"Quel jour vient avant le {d} ?", f"Avant le {d}, c'est le {prev}.", "calendar"))
     for i, m in enumerate(MONTHS):
         nxt, prev = MONTHS[(i + 1) % 12], MONTHS[(i - 1) % 12]
         art = "d'" if m[0] in _VOWELS else "de "
-        out.append(_conv(f"Quel mois vient après {m} ?", f"Après {m}, c'est {nxt}."))
-        out.append(_conv(f"Quel mois vient avant {m} ?", f"Avant {m}, c'est {prev}."))
-        out.append(_conv(f"Quel est le numéro du mois {art}{m} ?", f"{m.capitalize()} est le mois numéro {i + 1}."))
-    out.append(_conv("Cite les jours de la semaine.", "Les jours de la semaine sont : " + ", ".join(DAYS[:-1]) + " et " + DAYS[-1] + "."))
-    out.append(_conv("Cite les mois de l'année.", "Les mois de l'année sont : " + ", ".join(MONTHS[:-1]) + " et " + MONTHS[-1] + "."))
+        out.append(_conv(f"Quel mois vient après {m} ?", f"Après {m}, c'est {nxt}.", "calendar"))
+        out.append(_conv(f"Quel mois vient avant {m} ?", f"Avant {m}, c'est {prev}.", "calendar"))
+        out.append(_conv(f"Quel est le numéro du mois {art}{m} ?", f"{m.capitalize()} est le mois numéro {i + 1}.", "calendar"))
+    out.append(_conv("Cite les jours de la semaine.", "Les jours de la semaine sont : " + ", ".join(DAYS[:-1]) + " et " + DAYS[-1] + ".", "calendar"))
+    out.append(_conv("Cite les mois de l'année.", "Les mois de l'année sont : " + ", ".join(MONTHS[:-1]) + " et " + MONTHS[-1] + ".", "calendar"))
     return out
 
 
 def _opposite_examples(rng: random.Random) -> List[Dict]:
     out = []
     for a, b in OPPOSITES:
-        out.append(_conv(f"Quel est le contraire de {a} ?", f"Le contraire de {a} est {b}."))
-        out.append(_conv(f"Quel est le contraire de {b} ?", f"Le contraire de {b} est {a}."))
+        out.append(_conv(f"Quel est le contraire de {a} ?", f"Le contraire de {a} est {b}.", "opposites"))
+        out.append(_conv(f"Quel est le contraire de {b} ?", f"Le contraire de {b} est {a}.", "opposites"))
     return out
 
 
-def _pairs(table, rng: random.Random, reps: int) -> List[Dict]:
+def _pairs(table, rng: random.Random, reps: int, category: str) -> List[Dict]:
     out = []
     for questions, answers in table:
         for _ in range(reps):
-            out.append(_conv(rng.choice(questions), rng.choice(answers)))
+            out.append(_conv(rng.choice(questions), rng.choice(answers), category))
     return out
 
 
@@ -240,10 +240,10 @@ def build_synthetic_qa(seed: int = 0, n_arithmetic: int = 1200, id_reps: int = 8
     single += _arithmetic_examples(rng, n_arithmetic)
     single += _calendar_examples(rng)
     single += _opposite_examples(rng)
-    single += [_conv(q, a) for q, a in FACTS for _ in range(3)]
-    single += [_conv(q, a) for q, a in CANNOT for _ in range(3)]
-    single += _pairs(IDENTITY, rng, id_reps)
-    single += _pairs(GREETINGS, rng, id_reps)
+    single += [_conv(q, a, "facts") for q, a in FACTS for _ in range(3)]
+    single += [_conv(q, a, "cannot") for q, a in CANNOT for _ in range(3)]
+    single += _pairs(IDENTITY, rng, id_reps, "identity")
+    single += _pairs(GREETINGS, rng, id_reps, "greetings")
     rng.shuffle(single)
 
     # conversations à 2 tours : on enchaîne deux échanges indépendants (apprend l'alternance des tours)
@@ -251,7 +251,7 @@ def build_synthetic_qa(seed: int = 0, n_arithmetic: int = 1200, id_reps: int = 8
     two_turn = []
     for _ in range(n_two):
         a, b = rng.sample(single, 2)
-        two_turn.append({"messages": a["messages"] + b["messages"]})
+        two_turn.append({"messages": a["messages"] + b["messages"], "category": "two_turn"})
     data = single + two_turn
     rng.shuffle(data)
     return data

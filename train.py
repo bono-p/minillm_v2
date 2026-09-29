@@ -346,7 +346,7 @@ def train(cfg: TrainConfig) -> dict:
                 time_up = bool(flag.item())
 
             # ── éval / sauvegarde (éval AVANT sauvegarde : best_val à jour dans le ckpt) ──
-            if it % cfg.eval_every == 0 or it == max_iters or time_up:
+            if it % cfg.eval_every_at(it) == 0 or it == max_iters or time_up:
                 do_eval()
                 if cfg.patience > 0 and no_improve >= cfg.patience:
                     say(f"⏹  early stopping : {no_improve} évaluations sans amélioration.")

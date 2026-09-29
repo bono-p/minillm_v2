@@ -32,6 +32,55 @@ from data import write_sft_split
 from mini_tokenizer import MiniTokenizer, save_meta
 from synthetic_qa import build_synthetic_qa
 
+# Poids par défaut appliqués au jeu synthétique APRÈS dédoublonnage (1.0 = inchangé). Les catégories à
+# petit espace de réponses (identity/greetings/cannot) saturent en quelques dizaines d'exemples uniques ;
+# les sur-représenter ne fait que gonfler le nombre de doublons vus par le modèle, pas la diversité réelle.
+DEFAULT_SYNTHETIC_WEIGHTS = {
+    "identity": 0.5, "greetings": 0.5, "cannot": 0.5,
+    "capitals": 1.0, "facts": 1.0, "calendar": 1.0, "opposites": 1.0,
+    "arithmetic": 1.0, "two_turn": 1.0, "misc": 1.0,
+}
+
+
+def dedup_and_reweight(convs: List[Dict], weights: Optional[Dict[str, float]] = None,
+                        seed: int = 0, verbose: bool = True) -> List[Dict]:
+    """Dédoublonne par (question, réponse) exacte puis ré-échantillonne chaque catégorie selon `weights`
+    (poids < 1 : sous-échantillonnage ; poids > 1 : ré-échantillonnage AVEC remise depuis le pool dédoublonné
+    de cette catégorie — jamais au-delà de ce que sa diversité réelle permet sans dupliquer davantage)."""
+    weights = {**DEFAULT_SYNTHETIC_WEIGHTS, **(weights or {})}
+    rng = np.random.default_rng(seed)
+
+    seen = set()
+    unique: List[Dict] = []
+    for c in convs:
+        key = tuple(m["content"] for m in c["messages"])
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(c)
+
+    by_cat: Dict[str, List[Dict]] = {}
+    for c in unique:
+        by_cat.setdefault(c.get("category", "misc"), []).append(c)
+
+    out: List[Dict] = []
+    if verbose:
+        print(f"  synthetic : {len(convs):,} bruts -> {len(unique):,} uniques, puis pondération :")
+    for cat, items in sorted(by_cat.items()):
+        w = weights.get(cat, 1.0)
+        n = round(len(items) * w)
+        if n <= len(items):
+            idx = rng.choice(len(items), size=n, replace=False)
+        else:
+            idx = rng.choice(len(items), size=n, replace=True)
+        picked = [items[i] for i in idx]
+        out.extend(picked)
+        if verbose:
+            print(f"    {cat:<12} {len(items):>5,} uniques  x{w:<4} -> {len(picked):>5,}")
+    rng.shuffle(out)
+    return out
+
+
 Conv = Dict  # {"messages": [{"role":..., "content":...}, ...]}
 
 
@@ -216,13 +265,15 @@ def _safe(name: str, fn, *args, **kwargs) -> List[Conv]:
 
 def build_sft(tokenizer_path: str, out_dir: str, alpaca: int = 30_000, piaf: int = 4_000, oasst: int = 3_000,
               alpaca_gpt4: int = 0, evol: int = 0, sharegpt: int = 0,
-              synthetic_repeat: int = 2, extra_jsonl: Optional[List[str]] = None, max_len: int = 512,
+              synthetic_repeat: int = 2, synthetic_weights: Optional[Dict[str, float]] = None,
+              extra_jsonl: Optional[List[str]] = None, max_len: int = 512,
               val_permille: int = 20, seed: int = 0, persona: Optional[str] = None, persona_repeat: int = 8, extra_repeat: int = 1) -> dict:
     tok = MiniTokenizer(tokenizer_path)
     os.makedirs(out_dir, exist_ok=True)
     print("Sources :")
     sources: Dict[str, List[Conv]] = {}
-    sources["synthetic"] = [c for r in range(synthetic_repeat) for c in build_synthetic_qa(seed=seed + r)]
+    synthetic_raw = [c for r in range(synthetic_repeat) for c in build_synthetic_qa(seed=seed + r)]
+    sources["synthetic"] = dedup_and_reweight(synthetic_raw, synthetic_weights, seed=seed)
     print(f"  ✓ {'synthetic':<16} {len(sources['synthetic']):>7,} exemples")
     if alpaca > 0:
         sources["french_alpaca"] = _safe("french_alpaca", load_french_alpaca, alpaca, seed=seed)
@@ -309,6 +360,8 @@ def main():
     p.add_argument("--evol", type=int, default=0, help="FreedomIntelligence/evol-instruct-french (instructions plus complexes, ~59k dispo)")
     p.add_argument("--sharegpt", type=int, default=0, help="FreedomIntelligence/sharegpt-french (conversations multi-tours, ~5.6k dispo)")
     p.add_argument("--synthetic_repeat", type=int, default=2)
+    p.add_argument("--synthetic_weights", type=str, default="",
+                    help='JSON, ex. \'{"identity": 0.5, "greetings": 0.3}\' — remplace les poids par défaut pour les catégories citées, garde les autres à leur défaut.')
     p.add_argument("--extra_jsonl", nargs="*", default=None)
     p.add_argument("--max_len", type=int, default=512)
     p.add_argument("--val_permille", type=int, default=20)
@@ -319,8 +372,9 @@ def main():
     p.add_argument("--persona_repeat", type=int, default=8, help="nb de copies de chaque Q/R de personnalité dans train")
     p.add_argument("--extra_repeat", type=int, default=1, help="nb de copies de chaque exemple de --extra_jsonl dans train (ex. 3 pour datasets/faits_cameroun_afrique.jsonl)")
     a = p.parse_args()
+    weights = json.loads(a.synthetic_weights) if a.synthetic_weights else None
     build_sft(a.tokenizer, a.out, a.alpaca, a.piaf, a.oasst, a.alpaca_gpt4, a.evol, a.sharegpt,
-              a.synthetic_repeat, a.extra_jsonl, a.max_len,
+              a.synthetic_repeat, weights, a.extra_jsonl, a.max_len,
               a.val_permille, a.seed, a.persona or None, a.persona_repeat, a.extra_repeat)
 
 

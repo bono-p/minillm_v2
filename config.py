@@ -152,6 +152,8 @@ class TrainConfig:
 
     # évaluation / sauvegarde
     eval_every: int = 500
+    eval_every_dense: int = 0        # si > 0, cadence d'éval utilisée tant que it <= eval_dense_until (localise le minimum tôt)
+    eval_dense_until: int = 0
     eval_iters: int = 50             # nb de batchs de VAL, TOUJOURS les mêmes (val fixe)
     eval_at_start: bool = False
     save_every: int = 1000
@@ -177,10 +179,16 @@ class TrainConfig:
                 init_from="checkpoints/pretrain/best.pt", resume="auto",
                 batch_size=16, grad_accum=2, max_iters=0, epochs=3,
                 lr=2e-4, min_lr=2e-5, weight_decay=0.01, warmup_iters=50,
-                eval_every=250, eval_iters=0, eval_at_start=True, save_every=250,
+                eval_every=250, eval_every_dense=100, eval_dense_until=1500, eval_iters=0,
+                eval_at_start=True, save_every=250,
                 log_every=10, patience=5,
             )
         raise ValueError(f"mode inconnu : {mode}")
+
+    def eval_every_at(self, it: int) -> int:
+        if self.eval_every_dense > 0 and it <= self.eval_dense_until:
+            return self.eval_every_dense
+        return self.eval_every
 
     def to_dict(self) -> dict:
         return asdict(self)
