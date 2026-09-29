@@ -696,3 +696,40 @@ def test_resume_realigns_optimizer_state_onto_the_current_device(tok_and_data, t
     torch.save(ck, path)
     r = train.train(_tiny_cfg(data, out, max_iters=10))          # ne doit pas lever d'AssertionError
     assert r["iter"] == 10
+
+
+def test_expanded_cannot_covers_many_refusal_categories():
+    from synthetic_qa import CANNOT
+    assert len(CANNOT) >= 35 and len({q for q, _ in CANNOT}) == len(CANNOT)
+    qs = " ".join(f"{q} {a}".lower() for q, a in CANNOT)
+    for keyword in ("météo", "heure", "internet", "numéro de téléphone", "médecin", "match"):
+        assert keyword in qs, keyword
+    for _, a in CANNOT:                                       # aucun refus ne doit donner le conseil qu'il dit refuser
+        assert not any(bad in a.lower() for bad in ("mg", "posologie", "prends ", "tu devrais investir"))
+
+
+def test_ok_magpie_filters_long_markdown_code_links_and_identity():
+    from sft_data import ok_magpie
+    assert ok_magpie("Quelle est la capitale du Sénégal ?", "La capitale du Sénégal est Dakar.")
+    assert not ok_magpie("Explique.", "x" * 400)                              # trop long
+    assert not ok_magpie("Fais une liste.", "- **Un**\n- **Deux**")           # markdown lourd
+    assert not ok_magpie("Écris du code.", "```python\nprint(1)\n```")        # bloc de code
+    assert not ok_magpie("Trouve un site.", "Regarde ici : http://exemple.com")
+    assert not ok_magpie("Qui es-tu ?", "Je suis un assistant IA développé par OpenAI.")
+    assert not ok_magpie("", "Une réponse.")                                  # question vide
+
+
+def test_build_sft_wires_magpie_source_and_rebalanced_defaults(tok_and_data, tmp_path, monkeypatch):
+    import sft_data
+    tok, data = tok_and_data
+    calls = []
+
+    def fake_magpie(max_examples, seed=0):
+        calls.append(max_examples)
+        return [sft_data._conv(f"Question magpie {i} ?", f"Réponse magpie {i}.") for i in range(min(5, max_examples))]
+    monkeypatch.setattr(sft_data, "load_magpie_fr", fake_magpie)
+    import inspect
+    assert inspect.signature(sft_data.build_sft).parameters["alpaca"].default == 15_000
+    meta = sft_data.build_sft(os.path.join(data, "tokenizer.json"), str(tmp_path / "sft"), alpaca=0, piaf=0, oasst=0,
+                              magpie=5, synthetic_repeat=1, max_len=200, val_permille=100)
+    assert calls == [5] and "magpie_fr" in meta["sources"]

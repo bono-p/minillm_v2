@@ -2,8 +2,9 @@
 sft_data.py — construit le jeu de données de fine-tuning (questions -> réponses).
 
 Ce qui change par rapport à l'ancien SFT (PIAF seul) :
-  * plusieurs sources : Q/R synthétiques propres (hors-ligne), French-Alpaca (réponses courtes),
-    OpenAssistant FR (optionnel), PIAF (lecture de texte, fenêtre de contexte CENTRÉE sur la réponse) ;
+  * plusieurs sources : Q/R synthétiques propres (hors-ligne, incluant des refus variés : météo, heure,
+    Internet, infos personnelles...), French-Alpaca, Magpie-FR (filtré, réponses courtes), OpenAssistant FR,
+    PIAF (lecture de texte, fenêtre de contexte CENTRÉE sur la réponse) ;
   * template chat avec tokens spéciaux  <|user|> … <|end|> <|assistant|> … <|end|> ;
   * la loss ne porte QUE sur les réponses (mask) — avant, la réponse ne pesait que 2-4 % de la loss ;
   * exemples trop longs écartés (jamais tronqués au milieu d'une réponse) ;
@@ -12,8 +13,13 @@ Ce qui change par rapport à l'ancien SFT (PIAF seul) :
 Chaque source externe est protégée par try/except : si un dataset HF change de format, on le signale
 et on continue avec les autres.
 
+Équilibre par défaut (sur ~35-40k exemples) : French-Alpaca reste la plus grosse source à elle seule ; pour
+éviter qu'elle écrase le reste (identité, refus, PIAF), ses valeurs par défaut ont été réduites et Magpie-FR
+(source française, filtrée courte) ajoutée pour diversifier sans revenir à un seul gros bloc. Voir --alpaca,
+--magpie, --oasst, --piaf pour ajuster les proportions.
+
 Exemple :
-  python sft_data.py --tokenizer data/tokenizer.json --out data/sft --alpaca 30000 --piaf 4000 --oasst 3000
+  python sft_data.py --tokenizer data/tokenizer.json --out data/sft --alpaca 15000 --magpie 6000 --piaf 4000 --oasst 3000
 
 Personnalité : `personnalite.jsonl` (≤ 30 Q/R sur le modèle lui-même) est ajouté automatiquement, toujours en train,
 répété --persona_repeat fois. Modifie ce fichier puis reconstruis le SFT (supprime data/sft) et ré-entraîne.
@@ -68,6 +74,47 @@ def contradicts_persona(question: str, answer: str) -> bool:
 # ══════════════════════════════════════════════════════════════════════════════
 #  Sources externes (HuggingFace)
 # ══════════════════════════════════════════════════════════════════════════════
+_MARKDOWN_HEAVY = ("```", "###", "|---", "- **", "1. **")
+
+
+def ok_magpie(instr: str, resp: str, max_answer_chars: int = 350, max_question_chars: int = 300) -> bool:
+    """
+    Filtre pur (sans réseau, testable) pour Magpie-FR : questions/réponses générées par un gros modèle, donc
+    souvent longues, très formatées (listes, tableaux, titres markdown) et vouvoyées — on ne garde que ce qui
+    ressemble à une réponse courte, en phrases, du genre de ce que le reste du SFT enseigne déjà.
+    """
+    instr, resp = instr.strip(), resp.strip()
+    if not (3 <= len(resp) <= max_answer_chars) or not instr or len(instr) > max_question_chars:
+        return False
+    if any(m in resp for m in _MARKDOWN_HEAVY) or "http" in resp:
+        return False
+    if contradicts_persona(instr, resp):
+        return False
+    return True
+
+
+def load_magpie_fr(max_examples: int, seed: int = 0) -> List[Conv]:
+    """
+    bofenghuang/magpie-fr : questions + réponses en français générées par de gros modèles (Magpie), notées et
+    filtrées par leurs auteurs. On cible le sous-ensemble le plus petit et le plus tractable (50k lignes) plutôt
+    que les fichiers bruts (plusieurs Go par modèle). Champs non garantis d'une révision à l'autre du dataset :
+    plusieurs noms candidats sont essayés ; en cas d'échec, la source est simplement ignorée (voir _safe()).
+    """
+    from datasets import load_dataset
+    ds = load_dataset("bofenghuang/magpie-fr", data_files="magpie_inst_resp_mininstscore28_subset50k_responded_processed.jsonl",
+                      split="train", streaming=True)
+    ds = ds.shuffle(seed=seed, buffer_size=10_000)
+    out: List[Conv] = []
+    for row in ds:
+        instr = _first(row, "instruction", "question", "prompt", "conversation")
+        resp = _first(row, "response", "output", "answer", "responses")
+        if instr and resp and ok_magpie(instr, resp):
+            out.append(_conv(instr, resp))
+            if len(out) >= max_examples:
+                break
+    return out
+
+
 def load_french_alpaca(max_examples: int, max_answer_chars: int = 350, max_question_chars: int = 300, seed: int = 0) -> List[Conv]:
     from datasets import load_dataset
     ds = load_dataset("jpacifico/French-Alpaca-dataset-Instruct-110K", split="train")
@@ -177,8 +224,8 @@ def _safe(name: str, fn, *args, **kwargs) -> List[Conv]:
         return []
 
 
-def build_sft(tokenizer_path: str, out_dir: str, alpaca: int = 30_000, piaf: int = 4_000, oasst: int = 3_000,
-              synthetic_repeat: int = 2, extra_jsonl: Optional[List[str]] = None, max_len: int = 512,
+def build_sft(tokenizer_path: str, out_dir: str, alpaca: int = 15_000, piaf: int = 4_000, oasst: int = 3_000,
+              magpie: int = 6_000, synthetic_repeat: int = 2, extra_jsonl: Optional[List[str]] = None, max_len: int = 512,
               val_permille: int = 20, seed: int = 0, persona: Optional[str] = None, persona_repeat: int = 8, extra_repeat: int = 1) -> dict:
     tok = MiniTokenizer(tokenizer_path)
     os.makedirs(out_dir, exist_ok=True)
@@ -190,6 +237,8 @@ def build_sft(tokenizer_path: str, out_dir: str, alpaca: int = 30_000, piaf: int
         sources["french_alpaca"] = _safe("french_alpaca", load_french_alpaca, alpaca, seed=seed)
     if oasst > 0:
         sources["oasst_fr"] = _safe("oasst_fr", load_oasst_fr, oasst, seed=seed)
+    if magpie > 0:
+        sources["magpie_fr"] = _safe("magpie_fr", load_magpie_fr, magpie, seed=seed)
     if piaf > 0:
         sources["piaf"] = _safe("piaf", load_piaf, piaf, seed=seed)
     for p in extra_jsonl or []:
@@ -254,9 +303,10 @@ def main():
     p = argparse.ArgumentParser(description="MiniLLM v2 — données de fine-tuning")
     p.add_argument("--tokenizer", default="data/tokenizer.json")
     p.add_argument("--out", default="data/sft")
-    p.add_argument("--alpaca", type=int, default=30_000)
+    p.add_argument("--alpaca", type=int, default=15_000, help="French-Alpaca ; réduit par défaut pour ne pas écraser le reste (~76%% du SFT sinon)")
     p.add_argument("--piaf", type=int, default=4_000, help="exemples PIAF (le jeu en contient ~3 800 : tous par défaut)")
     p.add_argument("--oasst", type=int, default=3_000)
+    p.add_argument("--magpie", type=int, default=6_000, help="Magpie-FR, filtré (réponses courtes, sans markdown lourd)")
     p.add_argument("--synthetic_repeat", type=int, default=2)
     p.add_argument("--extra_jsonl", nargs="*", default=None)
     p.add_argument("--max_len", type=int, default=512)
@@ -268,7 +318,7 @@ def main():
     p.add_argument("--persona_repeat", type=int, default=8, help="nb de copies de chaque Q/R de personnalité dans train")
     p.add_argument("--extra_repeat", type=int, default=1, help="nb de copies de chaque exemple de --extra_jsonl dans train (ex. 3 pour datasets/faits_cameroun_afrique.jsonl)")
     a = p.parse_args()
-    build_sft(a.tokenizer, a.out, a.alpaca, a.piaf, a.oasst, a.synthetic_repeat, a.extra_jsonl, a.max_len,
+    build_sft(a.tokenizer, a.out, a.alpaca, a.piaf, a.oasst, a.magpie, a.synthetic_repeat, a.extra_jsonl, a.max_len,
               a.val_permille, a.seed, a.persona or None, a.persona_repeat, a.extra_repeat)
 
 

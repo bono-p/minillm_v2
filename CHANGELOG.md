@@ -1,5 +1,19 @@
 # Changelog — MiniLLM v2 (refonte après audit)
 
+## Rééquilibrage du SFT (branche `v2.1`)
+
+* `synthetic_qa.py` : la liste des « refus honnêtes » (`CANNOT`) passe de 10 à 38 questions, sur 8 catégories
+  (météo, heure/date, Internet, actualité/sport, infos personnelles, actions hors de portée, conseils
+  santé/droit/argent). Avant, ces exemples étaient trop rares pour peser face aux ~44 000 exemples qui poussent
+  à toujours répondre quelque chose — d'où des hallucinations confiantes sur « quel temps fera-t-il demain ? »
+  ou « as-tu accès à Internet ? ».
+* `sft_data.py` : nouvelle source **Magpie-FR** (`bofenghuang/magpie-fr`, filtrée : réponses courtes, sans
+  markdown lourd ni bloc de code ni lien, filtre d'identité réutilisé) pour diversifier sans dépendre d'une
+  seule grosse source. `--alpaca` par défaut réduit de 30 000 à 15 000 (French-Alpaca représentait ~76 % du
+  SFT) ; `--magpie` (6 000 par défaut) et `--oasst`/`--piaf` inchangés.
+* Filtrage exposé comme fonction pure testable (`ok_magpie`) plutôt qu'enfoui dans le chargeur réseau.
+* Notebooks Colab/Kaggle et tests (49 au total) mis à jour.
+
 ## v2.1 (branche `v2.1`)
 
 * **Kaggle** : `MiniLLM_v2_Kaggle.ipynb` + `kaggle_utils.py` (restauration depuis `/kaggle/input`, Google Drive via `gdown`, vérification des tailles de `.bin` et du checkpoint, élagage de la sortie).

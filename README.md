@@ -58,7 +58,7 @@ python train.py --mode pretrain --data_dir data/pretrain --out_dir checkpoints/p
                 --max_iters 10000 --batch_size 16 --grad_accum 8
 
 # 3. questions -> réponses (+ personnalité)
-python sft_data.py --tokenizer data/tokenizer.json --out data/sft     # ajoute automatiquement personnalite.jsonl
+python sft_data.py --tokenizer data/tokenizer.json --out data/sft     # ajoute personnalite.jsonl ; --alpaca/--magpie/--oasst/--piaf pour ajuster l'équilibre
 python train.py --mode sft --data_dir data/sft --out_dir checkpoints/sft --init_from checkpoints/pretrain/best.pt
 
 # 4. discuter / évaluer
@@ -137,7 +137,8 @@ Les apostrophes ’ et ' ne sont pas unifiées (choix : sans gravité).
 | source | volume max | forme |
 |---|---|---|
 | Q/R synthétiques (`synthetic_qa.py`, générées par code) | ~4 200 (2 × ~2 100) | phrase complète, faits sûrs, arithmétique calculée |
-| French-Alpaca (`jpacifico/French-Alpaca-dataset-Instruct-110K`) | 30 000 | réponses courtes (3–350 caractères) |
+| French-Alpaca (`jpacifico/French-Alpaca-dataset-Instruct-110K`) | 15 000 | réponses courtes (3–350 caractères) — réduit pour ne pas écraser le reste |
+| Magpie-FR (`bofenghuang/magpie-fr`) | 6 000 | Q/R françaises générées puis notées, filtrées (courtes, sans markdown/code/lien) |
 | OpenAssistant FR (`OpenAssistant/oasst1`) | 3 000 (souvent moins) | meilleure réponse en français |
 | PIAF (`etalab-ia/piaf`) | 4 000 (~3 800 dispo.) | « réponds à partir du texte », fenêtre de 600 caractères **centrée sur la réponse** |
 | `personnalite.jsonl` | 132 lignes × 8 copies (≈ 3 % du SFT) | **identité et caractère** uniquement (voir `PERSONNALITE.md`), toujours en `train` |
@@ -181,7 +182,7 @@ Le nom affiché dans les logs est calculé avec le vocabulaire **réel** des don
 | `personnalite.jsonl` · `PERSONNALITE.md` | identité + caractère du modèle (132 Q/R) · guide pour en ajouter sans créer de contradictions |
 | `datasets/` | jeux de Q/R de faits (Cameroun, Afrique), utilisables au SFT (`--extra_jsonl`) **et** par le RAG |
 | `check_data.py` | vérifie tes `.jsonl` (JSON valide, doublons, faits qui vieillissent…) avant d'entraîner |
-| `sft_data.py` | jeu SFT multi-sources, masque de loss, filtre d'identité, `--persona` |
+| `sft_data.py` | jeu SFT multi-sources (dont Magpie-FR filtré), masque de loss, filtre d'identité, `--persona` |
 | `data.py` | loaders **déterministes** : val fixe, époques sans remise, SFT groupé par longueur |
 | `checkpoint.py` | sauvegardes atomiques, `best`/`final`/reprise, nettoyage numérique |
 | `train.py` | boucle unique (pretrain + SFT), DDP, budget temps, log JSONL (ETA, mémoire GPU), garde-fou tokenizer |
@@ -305,7 +306,7 @@ répétitions au bout de quelques phrases, ne répond pas aux questions (normal 
 ## Tests
 
 ```bash
-python -m pytest -q          # 46 tests, CPU, ~20 s : KV-cache = forward complet, nombre de paramètres exact, masque de loss, nettoyage,
+python -m pytest -q          # 49 tests, CPU, ~1 min 15 s : KV-cache = forward complet, nombre de paramètres exact, masque de loss, nettoyage,
                              # tokenizer, loaders, reprise exacte, best jamais écrasé, DDP 2 processus, continuité 1↔2 GPU, RAG, outils Kaggle…
 python smoke_test.py         # pipeline complet sur un mini modèle (corpus local -> tokenizer -> pretrain -> reprise -> SFT -> génération)
 ```
