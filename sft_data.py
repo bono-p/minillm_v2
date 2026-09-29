@@ -115,9 +115,11 @@ def load_magpie_fr(max_examples: int, seed: int = 0) -> List[Conv]:
     return out
 
 
-def load_french_alpaca(max_examples: int, max_answer_chars: int = 350, max_question_chars: int = 300, seed: int = 0) -> List[Conv]:
+def load_alpaca_style(dataset_name: str, max_examples: int, max_answer_chars: int = 350,
+                      max_question_chars: int = 300, seed: int = 0) -> List[Conv]:
+    """Charge n'importe quel dataset au format Alpaca (instruction/input/output ou équivalent)."""
     from datasets import load_dataset
-    ds = load_dataset("jpacifico/French-Alpaca-dataset-Instruct-110K", split="train")
+    ds = load_dataset(dataset_name, split="train")
     idx = np.random.default_rng(seed).permutation(len(ds))
     out: List[Conv] = []
     for i in idx:
@@ -136,6 +138,10 @@ def load_french_alpaca(max_examples: int, max_answer_chars: int = 350, max_quest
         if len(out) >= max_examples:
             break
     return out
+
+
+def load_french_alpaca(max_examples: int, max_answer_chars: int = 350, max_question_chars: int = 300, seed: int = 0) -> List[Conv]:
+    return load_alpaca_style("jpacifico/French-Alpaca-dataset-Instruct-110K", max_examples, max_answer_chars, max_question_chars, seed)
 
 
 def _piaf_window(context: str, ans_start: int, ans_len: int, width: int = 600) -> str:
@@ -196,6 +202,37 @@ def load_oasst_fr(max_examples: int, max_answer_chars: int = 500, seed: int = 0)
     return out[:max_examples]
 
 
+def load_sharegpt_fr(max_examples: int, max_turns: int = 4, max_msg_chars: int = 400, seed: int = 0) -> List[Conv]:
+    """Conversations multi-tours (format ShareGPT : conversations=[{from, value}, ...]) -> diversité de FORME
+    que les sources question->réponse à un tour n'apportent pas (relances, contexte qui s'accumule)."""
+    from datasets import load_dataset
+    ds = load_dataset("FreedomIntelligence/sharegpt-french", split="train")
+    role_map = {"human": "user", "gpt": "assistant", "system": "system", "user": "user", "assistant": "assistant"}
+    idx = np.random.default_rng(seed).permutation(len(ds))
+    out: List[Conv] = []
+    for i in idx:
+        row = ds[int(i)]
+        turns = row.get("conversations") or row.get("conversation") or []
+        messages = []
+        for t in turns[:max_turns]:
+            role = role_map.get(str(t.get("from", "")).lower())
+            content = (t.get("value") or "").strip()
+            if not role or not content or len(content) > max_msg_chars:
+                messages = []
+                break
+            messages.append({"role": role, "content": content})
+        if len(messages) < 2 or messages[0]["role"] != "user" or messages[-1]["role"] != "assistant":
+            continue
+        text = " ".join(m["content"] for m in messages)
+        if "###" in text or "http" in text or any(contradicts_persona(m["content"], m2["content"])
+                                                    for m, m2 in zip(messages, messages[1:])):
+            continue
+        out.append({"messages": messages})
+        if len(out) >= max_examples:
+            break
+    return out
+
+
 def load_jsonl(path: str) -> List[Conv]:
     """Tes propres données : lignes {"messages":[...]} ou {"question":..., "answer":...}."""
     out: List[Conv] = []
@@ -225,7 +262,8 @@ def _safe(name: str, fn, *args, **kwargs) -> List[Conv]:
 
 
 def build_sft(tokenizer_path: str, out_dir: str, alpaca: int = 15_000, piaf: int = 4_000, oasst: int = 3_000,
-              magpie: int = 6_000, synthetic_repeat: int = 2, extra_jsonl: Optional[List[str]] = None, max_len: int = 512,
+              magpie: int = 6_000, alpaca_gpt4: int = 0, evol: int = 0, sharegpt: int = 0,
+              synthetic_repeat: int = 2, extra_jsonl: Optional[List[str]] = None, max_len: int = 512,
               val_permille: int = 20, seed: int = 0, persona: Optional[str] = None, persona_repeat: int = 8, extra_repeat: int = 1) -> dict:
     tok = MiniTokenizer(tokenizer_path)
     os.makedirs(out_dir, exist_ok=True)
@@ -241,6 +279,16 @@ def build_sft(tokenizer_path: str, out_dir: str, alpaca: int = 15_000, piaf: int
         sources["magpie_fr"] = _safe("magpie_fr", load_magpie_fr, magpie, seed=seed)
     if piaf > 0:
         sources["piaf"] = _safe("piaf", load_piaf, piaf, seed=seed)
+    # Nouvelles sources (diversité) : réponses GPT-4 (plus soignées), instructions plus complexes, multi-tours.
+    if alpaca_gpt4 > 0:
+        sources["alpaca_gpt4_fr"] = _safe("alpaca_gpt4_fr", load_alpaca_style,
+                                          "FreedomIntelligence/alpaca-gpt4-french", alpaca_gpt4, seed=seed)
+    if evol > 0:
+        sources["evol_instruct_fr"] = _safe("evol_instruct_fr", load_alpaca_style,
+                                            "FreedomIntelligence/evol-instruct-french", evol,
+                                            max_answer_chars=450, seed=seed)
+    if sharegpt > 0:
+        sources["sharegpt_fr"] = _safe("sharegpt_fr", load_sharegpt_fr, sharegpt, seed=seed)
     for p in extra_jsonl or []:
         sources[f"jsonl:{os.path.basename(p)}"] = _safe(p, load_jsonl, p)
 
@@ -307,6 +355,9 @@ def main():
     p.add_argument("--piaf", type=int, default=4_000, help="exemples PIAF (le jeu en contient ~3 800 : tous par défaut)")
     p.add_argument("--oasst", type=int, default=3_000)
     p.add_argument("--magpie", type=int, default=6_000, help="Magpie-FR, filtré (réponses courtes, sans markdown lourd)")
+    p.add_argument("--alpaca_gpt4", type=int, default=0, help="FreedomIntelligence/alpaca-gpt4-french (réponses GPT-4, ~50k dispo)")
+    p.add_argument("--evol", type=int, default=0, help="FreedomIntelligence/evol-instruct-french (instructions plus complexes, ~59k dispo)")
+    p.add_argument("--sharegpt", type=int, default=0, help="FreedomIntelligence/sharegpt-french (conversations multi-tours, ~5.6k dispo)")
     p.add_argument("--synthetic_repeat", type=int, default=2)
     p.add_argument("--extra_jsonl", nargs="*", default=None)
     p.add_argument("--max_len", type=int, default=512)
@@ -318,8 +369,11 @@ def main():
     p.add_argument("--persona_repeat", type=int, default=8, help="nb de copies de chaque Q/R de personnalité dans train")
     p.add_argument("--extra_repeat", type=int, default=1, help="nb de copies de chaque exemple de --extra_jsonl dans train (ex. 3 pour datasets/faits_cameroun_afrique.jsonl)")
     a = p.parse_args()
-    build_sft(a.tokenizer, a.out, a.alpaca, a.piaf, a.oasst, a.magpie, a.synthetic_repeat, a.extra_jsonl, a.max_len,
-              a.val_permille, a.seed, a.persona or None, a.persona_repeat, a.extra_repeat)
+    build_sft(a.tokenizer, a.out, alpaca=a.alpaca, piaf=a.piaf, oasst=a.oasst, magpie=a.magpie,
+              alpaca_gpt4=a.alpaca_gpt4, evol=a.evol, sharegpt=a.sharegpt,
+              synthetic_repeat=a.synthetic_repeat, extra_jsonl=a.extra_jsonl, max_len=a.max_len,
+              val_permille=a.val_permille, seed=a.seed, persona=a.persona or None,
+              persona_repeat=a.persona_repeat, extra_repeat=a.extra_repeat)
 
 
 if __name__ == "__main__":
