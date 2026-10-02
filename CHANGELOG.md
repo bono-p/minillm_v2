@@ -2,6 +2,12 @@
 
 Chaque ligne relie un problème constaté à l'audit à sa correction et au fichier concerné.
 
+## Reprise du pré-entraînement 49M (plan raccourci)
+
+| Constat | Choix | Où |
+|---|---|---|
+| Plan initial de 280 000 it. (≈ 5,7 époques) arrêté vers l'it. 42 700 : le LR n'avait pas décru (≈ 5,7e-4) | Plan raccourci à 50 200 it. (≈ 1,02 époque, 3 290 M tokens) avec le schedule `wsd` (stable à 6e-4 jusqu'à l'it. 42 670, puis décroissance linéaire jusqu'à 6e-5) ; reprise automatique, aucun changement de code ni de données | `colab/reprise_pretrain.py` |
+
 ## Sauvegarde du « meilleur » modèle
 
 | Problème | Correction | Où |
