@@ -1,5 +1,17 @@
 # Changelog — MiniLLM v2 (refonte après audit)
 
+## SFT v3.2 — ablation A/B/C/D (branche `v2.1.1`)
+
+Constat : le SFT v3.1 (+8 000 exemples synthétiques, source GPT-4 FR) n'a pas amélioré le modèle — calcul toujours non appris (0-7 %), persona 95 % → 59 %, régressions sur des faits simples, définitions qui s'effondrent sur une même phrase, réponses de refus (« Je suis désolé, je ne peux pas générer de texte »).
+
+* **`sft_filters.py`** (sans torch) : filtre des sources externes — refus, boucles (« Le Louvre » ×5), échos de la question. `sft_data.py --quality_filter 1`. Jamais appliqué au synthétique ni à la persona.
+* **`--persona_share 0.06`** : la personnalité garde ~6 % du train quelle que soit la taille du corpus (au lieu d'un nombre de copies fixe qui se diluait).
+* **`--plus_light 1`** : `synthetic_plus` sans définitions, suites ni problèmes (0-5 % de réussite) ; ~1 000 calculs.
+* **`basics_eval.py`** : test de régression sur 36 connaissances de base (mots entiers : « 7 » ne valide pas « 17 »).
+* **`compare_sft.py`** : tableau unique persona / qa / basics / % de réponses distinctes / refus / boucles, sur un jeu de validation commun ; compare `final.pt` ET `best.pt` (le `best.pt` choisi par val_loss tombe en milieu d'entraînement et mémorise moins la persona).
+* **Notebook** `colab/SFT_ablation.ipynb` : 4 variantes (A témoin v3 / B +plus allégé / C +filtre +persona 6 % / D +GPT-4 FR filtré), chacune dans `checkpoints/sft_X`.
+* **Tests** : 4 nouveaux (filtres, mode allégé sans fuite vers l'éval, scoring en mots entiers, lecture des sorties d'evaluate).
+
 ## SFT v3.1 (branche `v2.1.1`)
 
 * **`synthetic_plus.py`** : ~8 000 exemples calculés par code (additions/soustractions jusqu'à 100, tables de multiplication/division, pourcentages, petits problèmes avec le calcul écrit avant le résultat, suites de nombres, intrus, logique, calendrier, langue, 65 définitions courtes). Activé par `sft_data.py --plus 1`.

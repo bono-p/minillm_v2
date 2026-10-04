@@ -404,7 +404,8 @@ PLUS_WEIGHTS = {"arithmetic_plus": 1.0, "problems": 1.0, "sequences": 1.0, "logi
                 "language": 1.5, "definitions": 3.0}
 
 
-def build_synthetic_plus(seed: int = 0, exclude: Optional[Iterable[str]] = None, weights: Optional[Dict[str, float]] = None) -> List[Dict]:
+def build_synthetic_plus(seed: int = 0, exclude: Optional[Iterable[str]] = None, weights: Optional[Dict[str, float]] = None,
+                         light: bool = False, arith_cap: int = 1000) -> List[Dict]:
     """Conversations synthétiques supplémentaires. `exclude` : questions à ne JAMAIS entraîner (batterie de test)."""
     rng = random.Random(seed)
     blocked: Set[str] = {norm_q(q) for q in (exclude or [])}
@@ -414,6 +415,9 @@ def build_synthetic_plus(seed: int = 0, exclude: Optional[Iterable[str]] = None,
         "logic": _odd_one_out(rng) + _logic(rng), "calendar_plus": _calendar_plus(rng),
         "language": _language(rng), "definitions": _definitions(rng),
     }
+    if light:       # v3.2 : on garde ce qui a marché (logique, intrus, langue, calendrier) ; on retire ce qui n'a rien appris
+        for useless in ("definitions", "sequences", "problems"):   # définitions : effondrement ; suites/problèmes : 0-5 % de réussite
+            pools.pop(useless, None)
     out, seen = [], set()
     for cat, convs in pools.items():
         uniq = []
@@ -423,6 +427,8 @@ def build_synthetic_plus(seed: int = 0, exclude: Optional[Iterable[str]] = None,
                 continue
             seen.add((q, a))
             uniq.append(c)
+        if light and cat == "arithmetic_plus":
+            uniq = rng.sample(uniq, min(arith_cap, len(uniq)))
         n = round(len(uniq) * w.get(cat, 1.0))
         picked = [uniq[i % len(uniq)] for i in range(n)] if n > len(uniq) else rng.sample(uniq, n)
         out += picked

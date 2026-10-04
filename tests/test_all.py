@@ -741,3 +741,47 @@ def test_heldout_arithmetic_is_also_removed_from_the_old_synthetic_set():
     kept = drop_heldout_arithmetic([c for r in range(2) for c in build_synthetic_qa(seed=r)])
     train_q = {norm_q(m["content"]) for c in kept + build_synthetic_plus(seed=0) for m in c["messages"] if m["role"] == "user"}
     assert not any(norm_q(q) in train_q for v in build_items(60).values() for q, _ in v)
+
+
+# ── v3.2 : filtres qualité, synthetic_plus allégé, basics_eval, compare_sft ──────────────────────
+def test_quality_filters_catch_observed_failures_and_spare_good_answers():
+    from sft_filters import echoes_question, filter_quality, has_repetition_loop, is_refusal, persona_repeat_for_share
+    assert is_refusal("Je suis désolé, je ne peux pas générer de texte.") and is_refusal("En tant qu'IA, je n'ai pas d'avis.")
+    assert has_repetition_loop("1. Le Louvre 2. Le Louvre 3. Le Louvre 4. Le Louvre 5. Le Louvre")
+    assert has_repetition_loop("- Paris - Rome - Rome - Rome - Rome - Rome - Rome - Rome - Rome - Rome")
+    assert echoes_question("Dans quelle région se trouve Garoua ?", "Dans quelle région se trouve Garoua?")
+    assert not echoes_question("Corrige cette phrase : Les enfant joue dehors.", "Les enfants jouent dehors.")
+    good = "1. Paris 2. Nice 3. Cannes 4. Marseille 5. Bordeaux 6. Strasbourg 7. Mont-Saint-Michel 8. Chamonix 9. Lyon 10. Toulouse"
+    assert not is_refusal(good) and not has_repetition_loop(good)
+    assert not has_repetition_loop("Il y a de la lumière de la lune de la nuit de la saison de la vie de la mer de la terre.")
+    convs = [{"messages": [{"role": "user", "content": "Capitale du Cameroun ?"}, {"role": "assistant", "content": "Yaoundé."}]},
+             {"messages": [{"role": "user", "content": "Écris un poème."}, {"role": "assistant", "content": "Je suis désolé, je ne peux pas."}]}]
+    kept, counts = filter_quality(convs)
+    assert len(kept) == 1 and counts == {"refus": 1}
+    assert persona_repeat_for_share(0.06, 28600, 132) == 14 and persona_repeat_for_share(0.0, 100, 132) == 1
+
+
+def test_synthetic_plus_light_drops_useless_categories_and_keeps_test_exclusion():
+    from collections import Counter
+    from synthetic_plus import build_synthetic_plus, norm_q
+    from skills_eval import build_items
+    light = build_synthetic_plus(seed=0, light=True)
+    cats = Counter(c["category"] for c in light)
+    assert not ({"definitions", "sequences", "problems"} & set(cats)) and cats["arithmetic_plus"] <= 1000
+    train_q = {norm_q(c["messages"][0]["content"]) for c in light}
+    assert not any(norm_q(q) in train_q for v in build_items(60).values() for q, _ in v)
+
+
+def test_basics_scoring_uses_whole_words():
+    from basics_eval import BASICS, is_correct
+    assert not is_correct("Il y a 17 jours.", ["sept", "7"]) and is_correct("Il y a sept jours.", ["sept", "7"])
+    assert not is_correct("Marseille.", ["mars"]) and is_correct("La capitale du Tchad est N'Djamena.", ["djamena"])
+    assert is_correct("La capitale du Cameroun est Yaoundé.", ["yaounde"]) and len(BASICS) >= 30
+
+
+def test_compare_sft_parses_evaluate_outputs():
+    from compare_sft import last_json, openqa_stats
+    assert last_json('✓ x\n\n{\n  "n": 132,\n  "f1_moyen": 0.801,\n  "exact_match": 0.5909\n}\nToi : Bonjour') == {"n": 132, "f1_moyen": 0.801, "exact_match": 0.5909}
+    assert last_json("pas de json") is None
+    st = openqa_stats("Q : a\nA : Je suis désolé, je ne peux pas.\n---\nQ : b\nA : 1. Paris 2. Paris 3. Paris 4. Paris 5. Paris\n---\nQ : c\nA : Bonjour\n")
+    assert st["n"] == 3 and st["refusals"] == 1 and st["loops"] == 1

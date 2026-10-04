@@ -273,7 +273,8 @@ def build_sft(tokenizer_path: str, out_dir: str, alpaca: int = 30_000, piaf: int
               alpaca_gpt4: int = 0, evol: int = 0, sharegpt: int = 0,
               synthetic_repeat: int = 2, synthetic_weights: Optional[Dict[str, float]] = None,
               extra_jsonl: Optional[List[str]] = None, max_len: int = 512,
-              plus: int = 0, val_permille: int = 20, seed: int = 0, persona: Optional[str] = None, persona_repeat: int = 8, extra_repeat: int = 1) -> dict:
+              plus: int = 0, val_permille: int = 20, seed: int = 0, persona: Optional[str] = None, persona_repeat: int = 8, extra_repeat: int = 1,
+              plus_light: int = 0, quality_filter: int = 0, persona_share: float = 0.0) -> dict:
     tok = MiniTokenizer(tokenizer_path)
     os.makedirs(out_dir, exist_ok=True)
     print("Sources :")
@@ -290,7 +291,7 @@ def build_sft(tokenizer_path: str, out_dir: str, alpaca: int = 30_000, piaf: int
             from evaluate import UNSEEN_QA_PROMPTS as _TEST_Q
         except Exception:                                        # noqa: BLE001 (torch absent, etc.)
             _TEST_Q = []
-        sources["synthetic_plus"] = build_synthetic_plus(seed=seed, exclude=_TEST_Q)
+        sources["synthetic_plus"] = build_synthetic_plus(seed=seed, exclude=_TEST_Q, light=bool(plus_light))
         print(f"  ✓ {'synthetic_plus':<16} {len(sources['synthetic_plus']):>7,} exemples ({len(_TEST_Q)} questions de test exclues)")
         if not _TEST_Q:
             print("  ⚠️  batterie de test introuvable : les questions de test NE SONT PAS exclues de synthetic_plus")
@@ -312,6 +313,16 @@ def build_sft(tokenizer_path: str, out_dir: str, alpaca: int = 30_000, piaf: int
         sources["sharegpt_fr"] = _safe("sharegpt_fr", load_sharegpt_fr, sharegpt, seed=seed)
     for p in extra_jsonl or []:
         sources[f"jsonl:{os.path.basename(p)}"] = _safe(p, load_jsonl, p)
+
+    if quality_filter:                                           # sources EXTERNES seulement (jamais synthétique ni persona)
+        from sft_filters import filter_quality
+        print("\nFiltre qualité (refus / boucles / écho de la question) :")
+        for name in list(sources):
+            if name.startswith("synthetic"):
+                continue
+            sources[name], dropped = filter_quality(sources[name])
+            if dropped:
+                print(f"  {name:<16} retirés : {dropped} | gardés : {len(sources[name]):,}")
 
     persona_convs: List[Conv] = _safe("persona", load_jsonl, persona) if persona else []
 
@@ -336,14 +347,20 @@ def build_sft(tokenizer_path: str, out_dir: str, alpaca: int = 30_000, piaf: int
         splits["val"] += moved
         splits["train"] = [e for i, e in enumerate(splits["train"]) if i % step != 0]
     # Personnalité : TOUJOURS dans train (jamais en val), répétée persona_repeat fois pour peser face aux ~30 000 autres exemples
-    n_persona = 0
+    persona_enc = []
     for conv in persona_convs:
         ids, mask = tok.encode_chat(conv["messages"])
         if len(ids) > max_len + 1 or sum(mask) == 0:
             print(f"  ⚠️  persona ignoré (trop long) : {conv['messages'][0]['content'][:60]}")
             continue
-        splits["train"] += [(ids, mask)] * persona_repeat
-        n_persona += 1
+        persona_enc.append((ids, mask))
+    if persona_share > 0:                                        # la personnalité garde un POIDS stable quelle que soit la taille du corpus
+        from sft_filters import persona_repeat_for_share
+        persona_repeat = persona_repeat_for_share(persona_share, len(splits["train"]), len(persona_enc))
+        print(f"  persona_share={persona_share:.0%} -> {persona_repeat} copies de chacune des {len(persona_enc)} Q/R")
+    for enc in persona_enc:
+        splits["train"] += [enc] * persona_repeat
+    n_persona = len(persona_enc)
     if n_persona:
         per_source[f"persona (x{persona_repeat})"] = n_persona
     rng = np.random.default_rng(seed)
@@ -379,6 +396,9 @@ def main():
     p.add_argument("--evol", type=int, default=0, help="FreedomIntelligence/evol-instruct-french (instructions plus complexes, ~59k dispo)")
     p.add_argument("--sharegpt", type=int, default=0, help="FreedomIntelligence/sharegpt-french (conversations multi-tours, ~5.6k dispo)")
     p.add_argument("--plus", type=int, default=0, help="1 = ajoute synthetic_plus.py (arithmétique, problèmes, suites, logique, langue, définitions)")
+    p.add_argument("--plus_light", type=int, default=0, help="1 = synthetic_plus allégé : ~1000 calculs au lieu de ~4700, SANS les définitions (elles faisaient s'effondrer les réponses)")
+    p.add_argument("--quality_filter", type=int, default=0, help="1 = retire des sources externes les refus (« je suis désolé… »), les boucles et les échos de la question")
+    p.add_argument("--persona_share", type=float, default=0.0, help="ex. 0.06 : la personnalité pèse ~6 %% du train (remplace --persona_repeat)")
     p.add_argument("--synthetic_repeat", type=int, default=2)
     p.add_argument("--synthetic_weights", type=str, default="",
                     help='JSON, ex. \'{"identity": 0.5, "greetings": 0.3}\' — remplace les poids par défaut pour les catégories citées, garde les autres à leur défaut.')
@@ -395,7 +415,8 @@ def main():
     weights = json.loads(a.synthetic_weights) if a.synthetic_weights else None
     build_sft(a.tokenizer, a.out, a.alpaca, a.piaf, a.oasst, a.alpaca_gpt4, a.evol, a.sharegpt,
               a.synthetic_repeat, weights, a.extra_jsonl, a.max_len, a.plus,
-              a.val_permille, a.seed, a.persona or None, a.persona_repeat, a.extra_repeat)
+              a.val_permille, a.seed, a.persona or None, a.persona_repeat, a.extra_repeat,
+              a.plus_light, a.quality_filter, a.persona_share)
 
 
 if __name__ == "__main__":
