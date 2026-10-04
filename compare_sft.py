@@ -129,6 +129,16 @@ def table(results: Dict[str, Dict[str, object]]) -> str:
     return "\n".join(lines)
 
 
+def top_phrase_lines(results: Dict[str, Dict[str, object]]) -> List[str]:
+    """Une ligne par modèle : la phrase (5-gramme) la plus reprise dans les réponses de l'openqa et combien de réponses la contiennent."""
+    lines = []
+    for name, r in results.items():
+        o = r["openqa"]
+        if o.get("top5g"):
+            lines.append(f"  {name:<10} {o['top5g']:>3} réponses contiennent « {o.get('top5g_text', '')} »")
+    return lines
+
+
 def main():
     ap = argparse.ArgumentParser(description="MiniLLM — tableau comparatif de plusieurs checkpoints SFT")
     ap.add_argument("--ckpt", action="append", required=True, help="NOM=chemin/vers/checkpoint.pt (répétable)")
@@ -159,6 +169,7 @@ def main():
         with open(os.path.join(a.out_dir, f"basics_{name}.txt"), "w", encoding="utf-8") as f:
             f.write(results[name].pop("basics_raw"))                       # type: ignore[arg-type]
     print("\n" + table(results))
+    print("\nPhrase la plus reprise d'une réponse à l'autre :\n" + "\n".join(top_phrase_lines(results)))
     print("\nLecture : pers.EM haut = identité mémorisée ; basics haut = faits conservés ; top5g haut = une même phrase "
           "revient dans beaucoup de réponses (effondrement) ; refus/boucles = défauts à éviter.")
 

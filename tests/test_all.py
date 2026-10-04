@@ -815,3 +815,10 @@ def test_top_ngram_share_detects_phrase_collapse_that_distinct_misses():
     assert top_ngram_share(varied)[0] <= 1
     st = openqa_stats("".join(f"Q : x\nA : {a}\n---\n" for a in collapsed))
     assert st["distinct"] == 1.0 and st["top5g"] == 8          # « distinct » ne voit rien, top5g oui
+
+
+def test_top_phrase_lines_lists_the_most_reused_phrase_per_model():
+    from compare_sft import openqa_stats, top_phrase_lines
+    txt = "".join(f"Q : x\nA : Un {x} est un ensemble de programmes qui permettent de travailler.\n---\n" for x in ["module", "fichier", "objet"])
+    lines = top_phrase_lines({"X": {"openqa": openqa_stats(txt)}, "Y": {"openqa": openqa_stats("")}})
+    assert len(lines) == 1 and lines[0].lstrip().startswith("X") and "3 réponses" in lines[0]

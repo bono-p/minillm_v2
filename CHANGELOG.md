@@ -12,6 +12,7 @@ Constat : le SFT v3.1 (+8 000 exemples synthétiques, source GPT-4 FR) n'a pas a
 * **Notebook** `colab/SFT_ablation.ipynb` : 4 variantes (A témoin v3 / B +plus allégé / C +filtre +persona 6 % / D +GPT-4 FR filtré), chacune dans `checkpoints/sft_X`.
 * **Tests** : 4 nouveaux (filtres, mode allégé sans fuite vers l'éval, scoring en mots entiers, lecture des sorties d'evaluate).
 * **Mesure `top5g`** (compare_sft) : nombre de réponses de l'openqa qui partagent le même 5-gramme de mots ; remplace le taux de réponses distinctes, qui restait à 100 % même quand une définition était resservie pour une douzaine de notions. `basics_<nom>.txt` liste les connaissances de base ratées.
+* **`colab/Compare_publie.ipynb`** : compare le modèle publié sur Hugging Face (téléchargé, rien n'est modifié sur le dépôt) à C/B/A `final.pt` dans un seul tableau ; `compare_sft.py` affiche aussi la phrase la plus reprise de chaque modèle.
 * **Correctif** : `compare_sft.py` recopie `tokenizer.json` à côté du checkpoint s'il manque (le notebook d'ablation ne le fournissait pas : les 8 évaluations échouaient), s'arrête avec un message clair au lieu d'afficher un tableau de zéros, et affiche `-` quand une mesure n'a pas abouti.
 
 ## SFT v3.1 (branche `v2.1.1`)
