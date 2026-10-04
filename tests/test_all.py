@@ -785,3 +785,21 @@ def test_compare_sft_parses_evaluate_outputs():
     assert last_json("pas de json") is None
     st = openqa_stats("Q : a\nA : Je suis désolé, je ne peux pas.\n---\nQ : b\nA : 1. Paris 2. Paris 3. Paris 4. Paris 5. Paris\n---\nQ : c\nA : Bonjour\n")
     assert st["n"] == 3 and st["refusals"] == 1 and st["loops"] == 1
+
+
+def test_compare_sft_finds_and_copies_the_tokenizer(tmp_path):
+    from compare_sft import ensure_tokenizer, openqa_stats, table
+    data = tmp_path / "data"
+    (data / "sft_A").mkdir(parents=True)
+    (data / "tokenizer.json").write_text("{}")
+    ck = tmp_path / "ckpt" / "sft_A"
+    ck.mkdir(parents=True)
+    (ck / "final.pt").write_text("x")
+    # le cas qui a fait échouer le premier essai : rien à côté du checkpoint -> on le prend dans data/ (parent de val_dir)
+    got = ensure_tokenizer(str(ck / "final.pt"), None, str(data / "sft_A"))
+    assert got == str(ck / "tokenizer.json") and (ck / "tokenizer.json").exists()
+    other = tmp_path / "other"
+    other.mkdir()
+    assert ensure_tokenizer(str(other / "x.pt"), None, str(tmp_path / "nowhere" / "sft_A")) is None
+    st = openqa_stats("")
+    assert st["distinct"] is None and "-" in table({"X": {"persona": {}, "qa": {}, "basics": {}, "openqa": st}})

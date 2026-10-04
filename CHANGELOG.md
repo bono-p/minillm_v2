@@ -11,6 +11,7 @@ Constat : le SFT v3.1 (+8 000 exemples synthétiques, source GPT-4 FR) n'a pas a
 * **`compare_sft.py`** : tableau unique persona / qa / basics / % de réponses distinctes / refus / boucles, sur un jeu de validation commun ; compare `final.pt` ET `best.pt` (le `best.pt` choisi par val_loss tombe en milieu d'entraînement et mémorise moins la persona).
 * **Notebook** `colab/SFT_ablation.ipynb` : 4 variantes (A témoin v3 / B +plus allégé / C +filtre +persona 6 % / D +GPT-4 FR filtré), chacune dans `checkpoints/sft_X`.
 * **Tests** : 4 nouveaux (filtres, mode allégé sans fuite vers l'éval, scoring en mots entiers, lecture des sorties d'evaluate).
+* **Correctif** : `compare_sft.py` recopie `tokenizer.json` à côté du checkpoint s'il manque (le notebook d'ablation ne le fournissait pas : les 8 évaluations échouaient), s'arrête avec un message clair au lieu d'afficher un tableau de zéros, et affiche `-` quand une mesure n'a pas abouti.
 
 ## SFT v3.1 (branche `v2.1.1`)
 

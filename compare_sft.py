@@ -19,6 +19,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from typing import Dict, List, Optional
@@ -49,9 +50,23 @@ def openqa_stats(text: str) -> Dict[str, float]:
     """Statistiques de collapse sur les lignes « A : … » de la sortie de `evaluate.py openqa`."""
     answers = [m.group(1).strip() for m in re.finditer(r"^A : (.*)$", text, flags=re.M)]
     if not answers:
-        return {"n": 0, "distinct": 0.0, "refusals": 0, "loops": 0}
+        return {"n": 0, "distinct": None, "refusals": None, "loops": None}
     return {"n": len(answers), "distinct": round(len(set(answers)) / len(answers), 3),
             "refusals": sum(is_refusal(a) for a in answers), "loops": sum(has_repetition_loop(a) for a in answers)}
+
+
+def ensure_tokenizer(ckpt: str, explicit: Optional[str], val_dir: str) -> Optional[str]:
+    """load_model cherche tokenizer.json À CÔTÉ du checkpoint. On l'y copie s'il manque (cause de l'échec du premier essai :
+    train.py le recopie depuis le dossier parent du --data_dir, qui n'existait pas dans le notebook d'ablation).
+    Sources essayées : --tokenizer, puis le dossier parent de --val_dir (= data/). Retourne le chemin trouvé ou None."""
+    dest = os.path.join(os.path.dirname(os.path.abspath(ckpt)), "tokenizer.json")
+    if os.path.exists(dest):
+        return dest
+    for src in (explicit, os.path.join(os.path.dirname(os.path.abspath(val_dir)), "tokenizer.json")):
+        if src and os.path.exists(src):
+            shutil.copy(src, dest)
+            return dest
+    return None
 
 
 def _run(args: List[str]) -> str:
@@ -76,6 +91,10 @@ def _pct(x) -> str:
     return "  -  " if x is None else f"{x * 100:5.1f}"
 
 
+def _cnt(x) -> str:
+    return "-" if x is None else str(x)
+
+
 def _f1(x) -> str:
     return "  -  " if x is None else f"{x * 100:5.1f}"
 
@@ -87,7 +106,7 @@ def table(results: Dict[str, Dict[str, object]]) -> str:
         p, q, b, o = r["persona"], r["qa"], r["basics"], r["openqa"]
         lines.append(f"{name:<10} {_pct(p.get('exact_match')):>7} {_f1(p.get('f1_moyen')):>7} "
                      f"{_pct(q.get('exact_match')):>6} {_f1(q.get('f1')):>6} {_pct(q.get('ends_properly')):>6} "
-                     f"{_pct(b.get('basics')):>6} {_pct(o.get('distinct')):>8} {o.get('refusals', 0):>5} {o.get('loops', 0):>7}")
+                     f"{_pct(b.get('basics')):>6} {_pct(o.get('distinct')):>8} {_cnt(o.get('refusals')):>5} {_cnt(o.get('loops')):>7}")
     return "\n".join(lines)
 
 
@@ -97,6 +116,7 @@ def main():
     ap.add_argument("--val_dir", required=True, help="dossier de validation SFT COMMUN à tous les modèles")
     ap.add_argument("--out_dir", default="evals")
     ap.add_argument("--qa_n", type=int, default=300)
+    ap.add_argument("--tokenizer", default=None, help="tokenizer.json (par défaut : celui du dossier data/, parent de --val_dir)")
     a = ap.parse_args()
     os.makedirs(a.out_dir, exist_ok=True)
     results: Dict[str, Dict[str, object]] = {}
@@ -105,8 +125,16 @@ def main():
         if not os.path.exists(path):
             print(f"(absent : {path})")
             continue
+        if ensure_tokenizer(path, a.tokenizer, a.val_dir) is None:
+            print(f"❌ {name} : tokenizer.json introuvable (ni à côté du checkpoint, ni dans {os.path.dirname(os.path.abspath(a.val_dir))}). "
+                  "Passe --tokenizer chemin/vers/tokenizer.json.")
+            continue
         print(f"→ évaluation de {name} …")
         results[name] = evaluate_one(path, a.val_dir, a.qa_n)
+        if not (results[name]["persona"] or results[name]["qa"] or results[name]["basics"]):
+            print(f"❌ {name} : aucune mesure n'a abouti (voir les erreurs ci-dessus) — retiré du tableau.")
+            del results[name]
+            continue
         with open(os.path.join(a.out_dir, f"openqa_{name}.txt"), "w", encoding="utf-8") as f:
             f.write(results[name].pop("openqa_raw"))                       # type: ignore[arg-type]
     print("\n" + table(results))
