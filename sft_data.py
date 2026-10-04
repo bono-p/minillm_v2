@@ -122,6 +122,7 @@ def load_alpaca_style(dataset_name: str, max_examples: int, max_answer_chars: in
     """Charge n'importe quel dataset au format Alpaca (instruction/input/output ou équivalent)."""
     from datasets import load_dataset
     ds = load_dataset(dataset_name, split="train")
+    print(f"    {dataset_name} : colonnes {list(ds.features)} | {len(ds):,} lignes")
     idx = np.random.default_rng(seed).permutation(len(ds))
     out: List[Conv] = []
     for i in idx:
@@ -129,6 +130,11 @@ def load_alpaca_style(dataset_name: str, max_examples: int, max_answer_chars: in
         instr = _first(row, "instruction", "question", "prompt", "query")
         inp = _first(row, "input", "context")
         ans = _first(row, "output", "response", "answer", "completion")
+        if not (instr and ans):                          # format ShareGPT : conversations=[{from, value}, ...]
+            turns = row.get("conversations") or row.get("conversation") or []
+            hum = next((t.get("value") for t in turns if str(t.get("from", "")).lower() in ("human", "user")), "")
+            bot = next((t.get("value") for t in turns if str(t.get("from", "")).lower() in ("gpt", "assistant")), "")
+            instr, inp, ans = (hum or "").strip(), "", (bot or "").strip()
         if not instr or not ans:
             continue
         q = instr if not inp else f"{instr}\n\n{inp}"
@@ -267,7 +273,7 @@ def build_sft(tokenizer_path: str, out_dir: str, alpaca: int = 30_000, piaf: int
               alpaca_gpt4: int = 0, evol: int = 0, sharegpt: int = 0,
               synthetic_repeat: int = 2, synthetic_weights: Optional[Dict[str, float]] = None,
               extra_jsonl: Optional[List[str]] = None, max_len: int = 512,
-              val_permille: int = 20, seed: int = 0, persona: Optional[str] = None, persona_repeat: int = 8, extra_repeat: int = 1) -> dict:
+              plus: int = 0, val_permille: int = 20, seed: int = 0, persona: Optional[str] = None, persona_repeat: int = 8, extra_repeat: int = 1) -> dict:
     tok = MiniTokenizer(tokenizer_path)
     os.makedirs(out_dir, exist_ok=True)
     print("Sources :")
@@ -275,6 +281,19 @@ def build_sft(tokenizer_path: str, out_dir: str, alpaca: int = 30_000, piaf: int
     synthetic_raw = [c for r in range(synthetic_repeat) for c in build_synthetic_qa(seed=seed + r)]
     sources["synthetic"] = dedup_and_reweight(synthetic_raw, synthetic_weights, seed=seed)
     print(f"  ✓ {'synthetic':<16} {len(sources['synthetic']):>7,} exemples")
+    if plus > 0:                                                 # v3.1 : plus d'arithmétique/logique/langue, SANS les questions de test
+        from synthetic_plus import build_synthetic_plus, drop_heldout_arithmetic
+        n_before = len(sources["synthetic"])
+        sources["synthetic"] = drop_heldout_arithmetic(sources["synthetic"])      # garde l'éval des compétences honnête
+        print(f"  ℹ️  synthetic : {n_before - len(sources['synthetic'])} calculs retirés (réservés à skills_eval)")
+        try:
+            from evaluate import UNSEEN_QA_PROMPTS as _TEST_Q
+        except Exception:                                        # noqa: BLE001 (torch absent, etc.)
+            _TEST_Q = []
+        sources["synthetic_plus"] = build_synthetic_plus(seed=seed, exclude=_TEST_Q)
+        print(f"  ✓ {'synthetic_plus':<16} {len(sources['synthetic_plus']):>7,} exemples ({len(_TEST_Q)} questions de test exclues)")
+        if not _TEST_Q:
+            print("  ⚠️  batterie de test introuvable : les questions de test NE SONT PAS exclues de synthetic_plus")
     if alpaca > 0:
         sources["french_alpaca"] = _safe("french_alpaca", load_french_alpaca, alpaca, seed=seed)
     if oasst > 0:
@@ -359,6 +378,7 @@ def main():
     p.add_argument("--alpaca_gpt4", type=int, default=0, help="FreedomIntelligence/alpaca-gpt4-french (réponses GPT-4, ~50k dispo)")
     p.add_argument("--evol", type=int, default=0, help="FreedomIntelligence/evol-instruct-french (instructions plus complexes, ~59k dispo)")
     p.add_argument("--sharegpt", type=int, default=0, help="FreedomIntelligence/sharegpt-french (conversations multi-tours, ~5.6k dispo)")
+    p.add_argument("--plus", type=int, default=0, help="1 = ajoute synthetic_plus.py (arithmétique, problèmes, suites, logique, langue, définitions)")
     p.add_argument("--synthetic_repeat", type=int, default=2)
     p.add_argument("--synthetic_weights", type=str, default="",
                     help='JSON, ex. \'{"identity": 0.5, "greetings": 0.3}\' — remplace les poids par défaut pour les catégories citées, garde les autres à leur défaut.')
@@ -374,7 +394,7 @@ def main():
     a = p.parse_args()
     weights = json.loads(a.synthetic_weights) if a.synthetic_weights else None
     build_sft(a.tokenizer, a.out, a.alpaca, a.piaf, a.oasst, a.alpaca_gpt4, a.evol, a.sharegpt,
-              a.synthetic_repeat, weights, a.extra_jsonl, a.max_len,
+              a.synthetic_repeat, weights, a.extra_jsonl, a.max_len, a.plus,
               a.val_permille, a.seed, a.persona or None, a.persona_repeat, a.extra_repeat)
 
 

@@ -696,3 +696,48 @@ def test_resume_realigns_optimizer_state_onto_the_current_device(tok_and_data, t
     torch.save(ck, path)
     r = train.train(_tiny_cfg(data, out, max_iters=10))          # ne doit pas lever d'AssertionError
     assert r["iter"] == 10
+
+
+# ── v3.1 : synthetic_plus + skills_eval ───────────────────────────────────────────────────────
+def test_synthetic_plus_is_correct_and_never_contains_test_questions():
+    import re
+    from synthetic_plus import build_synthetic_plus, norm_q
+    src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "evaluate.py"), encoding="utf-8").read()
+    i = src.index("UNSEEN_QA_PROMPTS = [")
+    ns: dict = {}
+    exec(src[i:src.index("]\n", i) + 1], ns)
+    test_q = ns["UNSEEN_QA_PROMPTS"]
+    data = build_synthetic_plus(seed=0, exclude=test_q)
+    assert data == build_synthetic_plus(seed=0, exclude=test_q)                  # déterministe
+    assert {norm_q(q) for q in test_q}.isdisjoint({norm_q(c["messages"][0]["content"]) for c in data})
+    ops = {"+": lambda a, b: a + b, "-": lambda a, b: a - b, "×": lambda a, b: a * b, "÷": lambda a, b: a // b}
+    checked = 0
+    for c in data:
+        ans = c["messages"][1]["content"]
+        for a, op, b, r in re.findall(r"(\d+) ([+\-×÷]) (\d+) = (\d+)", ans):
+            assert ops[op](int(a), int(b)) == int(r), (c["messages"][0]["content"], ans)
+            checked += 1
+        words = {"plus": ops["+"], "moins": ops["-"], "fois": ops["×"], "divisé par": ops["÷"]}
+        for a, w, b, r in re.findall(r"(\d+) (plus|moins|fois|divisé par) (\d+) fait?s? (\d+)", ans) + \
+                re.findall(r"(\d+) (plus|moins|fois|divisé par) (\d+) font (\d+)", ans):
+            assert words[w](int(a), int(b)) == int(r), (c["messages"][0]["content"], ans)
+            checked += 1
+    assert checked > 4000
+
+
+def test_skills_eval_items_are_held_out_from_training():
+    from skills_eval import build_items
+    from synthetic_plus import build_synthetic_plus, norm_q
+    train_q = {norm_q(c["messages"][0]["content"]) for c in build_synthetic_plus(seed=0)}
+    items = build_items(60)
+    assert all(len(v) >= 15 for v in items.values())
+    assert not any(norm_q(q) in train_q for v in items.values() for q, _ in v)
+
+
+def test_heldout_arithmetic_is_also_removed_from_the_old_synthetic_set():
+    from synthetic_qa import build_synthetic_qa
+    from synthetic_plus import build_synthetic_plus, drop_heldout_arithmetic, norm_q
+    from skills_eval import build_items
+    kept = drop_heldout_arithmetic([c for r in range(2) for c in build_synthetic_qa(seed=r)])
+    train_q = {norm_q(m["content"]) for c in kept + build_synthetic_plus(seed=0) for m in c["messages"] if m["role"] == "user"}
+    assert not any(norm_q(q) in train_q for v in build_items(60).values() for q, _ in v)

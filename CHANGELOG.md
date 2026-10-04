@@ -1,5 +1,13 @@
 # Changelog — MiniLLM v2 (refonte après audit)
 
+## SFT v3.1 (branche `v2.1.1`)
+
+* **`synthetic_plus.py`** : ~8 000 exemples calculés par code (additions/soustractions jusqu'à 100, tables de multiplication/division, pourcentages, petits problèmes avec le calcul écrit avant le résultat, suites de nombres, intrus, logique, calendrier, langue, 65 définitions courtes). Activé par `sft_data.py --plus 1`.
+* **Pas de fuite vers l'évaluation** : les questions de `UNSEEN_QA_PROMPTS` sont exclues de `synthetic_plus`, et ~10 % des problèmes chiffrés (`is_heldout`) ne sont JAMAIS entraînés — y compris dans l'ancien synthétique (`drop_heldout_arithmetic`).
+* **`skills_eval.py`** : exactitude sur ces problèmes tenus à l'écart (addition, soustraction, multiplication, division, suites, problèmes) — compare deux checkpoints sur exactement les mêmes problèmes.
+* **Correctif `sft_data.py`** : `load_alpaca_style` lit aussi le format ShareGPT (`conversations`: human/gpt). Avant, `alpaca-gpt4-french` ne chargeait aucun exemple sans le dire ; le chargeur affiche maintenant les colonnes du dataset.
+* **Tests** : 3 nouveaux (exactitude des réponses calculées, absence des questions de test, absence des problèmes tenus à l'écart).
+
 ## v2.1 (branche `v2.1`)
 
 * **Kaggle** : `MiniLLM_v2_Kaggle.ipynb` + `kaggle_utils.py` (restauration depuis `/kaggle/input`, Google Drive via `gdown`, vérification des tailles de `.bin` et du checkpoint, élagage de la sortie).
