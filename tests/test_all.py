@@ -803,3 +803,15 @@ def test_compare_sft_finds_and_copies_the_tokenizer(tmp_path):
     assert ensure_tokenizer(str(other / "x.pt"), None, str(tmp_path / "nowhere" / "sft_A")) is None
     st = openqa_stats("")
     assert st["distinct"] is None and "-" in table({"X": {"persona": {}, "qa": {}, "basics": {}, "openqa": st}})
+
+
+def test_top_ngram_share_detects_phrase_collapse_that_distinct_misses():
+    from compare_sft import openqa_stats, top_ngram_share
+    phrase = "est un ensemble de programmes qui permettent à un ordinateur d'effectuer des tâches."
+    collapsed = [f"Un {x} {phrase}" for x in ["processeur", "module", "package", "fichier", "objet", "classe", "serveur", "logiciel"]]
+    k, g = top_ngram_share(collapsed)
+    assert k == 8 and g.split()[0] in phrase.lower().replace("'", " ")          # un 5-gramme de la phrase répétée (ex æquo : n'importe lequel)
+    varied = ["La capitale du Cameroun est Yaoundé.", "Il y a sept jours dans une semaine.", "Marc est le plus jeune."]
+    assert top_ngram_share(varied)[0] <= 1
+    st = openqa_stats("".join(f"Q : x\nA : {a}\n---\n" for a in collapsed))
+    assert st["distinct"] == 1.0 and st["top5g"] == 8          # « distinct » ne voit rien, top5g oui

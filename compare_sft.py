@@ -6,7 +6,7 @@ persona, les faits et les refus). Mesures par checkpoint :
   persona   EM / F1 sur les 132 Q/R de personnalité (test de mémorisation de l'identité)
   qa        EM / F1 / ends_properly sur un jeu de validation COMMUN à tous les modèles (--val_dir)
   basics    % de connaissances de base conservées (basics_eval.py)
-  openqa    sur les 337 questions : % de réponses distinctes, nombre de refus, nombre de boucles
+  openqa    sur les 337 questions : top5g (phrase la plus reprise), nombre de refus, nombre de boucles
 
 Chaque mesure est lancée dans un sous-processus (evaluate.py / basics_eval.py) et son JSON final est lu : aucune
 dépendance à l'intérieur d'evaluate.py. Les sorties brutes de l'openqa sont écrites dans --out_dir.
@@ -22,6 +22,7 @@ import re
 import shutil
 import subprocess
 import sys
+from collections import Counter
 from typing import Dict, List, Optional
 
 from sft_filters import has_repetition_loop, is_refusal
@@ -46,12 +47,28 @@ def last_json(text: str) -> Optional[Dict]:
     return None
 
 
+def top_ngram_share(answers: List[str], n: int = 5):
+    """(nb de réponses, n-gramme) : le n-gramme de mots le plus REPRIS d'une réponse à l'autre (une fois par réponse).
+    Détecte l'effondrement sur une phrase type (« ensemble de programmes qui permettent à un ordinateur… » dans une
+    douzaine de réponses) que le simple taux de réponses distinctes ne voit pas."""
+    seen: Counter = Counter()
+    for a in answers:
+        w = re.findall(r"\w+", a.lower())
+        for g in {tuple(w[i:i + n]) for i in range(len(w) - n + 1)}:
+            seen[g] += 1
+    if not seen:
+        return 0, ""
+    g, k = seen.most_common(1)[0]
+    return k, " ".join(g)
+
+
 def openqa_stats(text: str) -> Dict[str, float]:
     """Statistiques de collapse sur les lignes « A : … » de la sortie de `evaluate.py openqa`."""
     answers = [m.group(1).strip() for m in re.finditer(r"^A : (.*)$", text, flags=re.M)]
     if not answers:
-        return {"n": 0, "distinct": None, "refusals": None, "loops": None}
-    return {"n": len(answers), "distinct": round(len(set(answers)) / len(answers), 3),
+        return {"n": 0, "distinct": None, "refusals": None, "loops": None, "top5g": None}
+    top_k, top_g = top_ngram_share(answers)
+    return {"n": len(answers), "distinct": round(len(set(answers)) / len(answers), 3), "top5g": top_k, "top5g_text": top_g,
             "refusals": sum(is_refusal(a) for a in answers), "loops": sum(has_repetition_loop(a) for a in answers)}
 
 
@@ -80,7 +97,9 @@ def evaluate_one(ckpt: str, val_dir: str, qa_n: int = 300) -> Dict[str, object]:
     out: Dict[str, object] = {}
     out["persona"] = last_json(_run(["evaluate.py", "persona", "--ckpt", ckpt])) or {}
     out["qa"] = last_json(_run(["evaluate.py", "qa", "--ckpt", ckpt, "--sft_dir", val_dir, "--n", str(qa_n)])) or {}
-    out["basics"] = last_json(_run(["basics_eval.py", "--ckpt", ckpt])) or {}
+    raw_b = _run(["basics_eval.py", "--ckpt", ckpt])
+    out["basics_raw"] = raw_b                                           # contient les questions ratées : voir evals/basics_<nom>.txt
+    out["basics"] = last_json(raw_b) or {}
     raw = _run(["evaluate.py", "openqa", "--ckpt", ckpt, "--n", "1000"])
     out["openqa_raw"] = raw
     out["openqa"] = openqa_stats(raw)
@@ -100,13 +119,13 @@ def _f1(x) -> str:
 
 
 def table(results: Dict[str, Dict[str, object]]) -> str:
-    head = f"{'modèle':<10} {'pers.EM':>7} {'pers.F1':>7} {'qa.EM':>6} {'qa.F1':>6} {'fin ok':>6} {'basics':>6} {'distinct':>8} {'refus':>5} {'boucles':>7}"
+    head = f"{'modèle':<10} {'pers.EM':>7} {'pers.F1':>7} {'qa.EM':>6} {'qa.F1':>6} {'fin ok':>6} {'basics':>6} {'top5g':>6} {'refus':>5} {'boucles':>7}"
     lines = [head, "-" * len(head)]
     for name, r in results.items():
         p, q, b, o = r["persona"], r["qa"], r["basics"], r["openqa"]
         lines.append(f"{name:<10} {_pct(p.get('exact_match')):>7} {_f1(p.get('f1_moyen')):>7} "
                      f"{_pct(q.get('exact_match')):>6} {_f1(q.get('f1')):>6} {_pct(q.get('ends_properly')):>6} "
-                     f"{_pct(b.get('basics')):>6} {_pct(o.get('distinct')):>8} {_cnt(o.get('refusals')):>5} {_cnt(o.get('loops')):>7}")
+                     f"{_pct(b.get('basics')):>6} {_cnt(o.get('top5g')):>6} {_cnt(o.get('refusals')):>5} {_cnt(o.get('loops')):>7}")
     return "\n".join(lines)
 
 
@@ -137,9 +156,11 @@ def main():
             continue
         with open(os.path.join(a.out_dir, f"openqa_{name}.txt"), "w", encoding="utf-8") as f:
             f.write(results[name].pop("openqa_raw"))                       # type: ignore[arg-type]
+        with open(os.path.join(a.out_dir, f"basics_{name}.txt"), "w", encoding="utf-8") as f:
+            f.write(results[name].pop("basics_raw"))                       # type: ignore[arg-type]
     print("\n" + table(results))
-    print("\nLecture : pers.EM haut = identité mémorisée ; basics haut = faits conservés ; distinct bas = réponses qui se "
-          "ressemblent toutes (effondrement) ; refus/boucles = défauts à éviter.")
+    print("\nLecture : pers.EM haut = identité mémorisée ; basics haut = faits conservés ; top5g haut = une même phrase "
+          "revient dans beaucoup de réponses (effondrement) ; refus/boucles = défauts à éviter.")
 
 
 if __name__ == "__main__":
