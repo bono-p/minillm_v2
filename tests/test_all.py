@@ -822,3 +822,46 @@ def test_top_phrase_lines_lists_the_most_reused_phrase_per_model():
     txt = "".join(f"Q : x\nA : Un {x} est un ensemble de programmes qui permettent de travailler.\n---\n" for x in ["module", "fichier", "objet"])
     lines = top_phrase_lines({"X": {"openqa": openqa_stats(txt)}, "Y": {"openqa": openqa_stats("")}})
     assert len(lines) == 1 and lines[0].lstrip().startswith("X") and "3 réponses" in lines[0]
+
+
+# ── v2.2 : outils de publication ────────────────────────────────────────────────────────────────────────────────────────────
+def test_repo_name_reproduces_the_published_v21_name_and_builds_v22():
+    import datetime
+    from release_tools import repo_name
+    assert repo_name("2.1", 48_508_672, 42500, 42500 * 65536, datetime.date(2026, 10, 1)) == \
+        "miniLLM_v2.1-49M-42500it_2.79Btoks_0.9ep_20261001"
+    assert repo_name("2.2", 48_508_672, 50200, 50200 * 65536, datetime.date(2026, 10, 4)) == \
+        "miniLLM_v2.2-49M-50200it_3.29Btoks_1.0ep_20261004"
+
+
+def test_release_log_reading_dedups_and_survives_garbage(tmp_path):
+    import json
+    from release_tools import log_summary, make_loss_plot, read_log
+    p = tmp_path / "log.jsonl"
+    lines = [{"type": "train", "it": 10, "loss": 3.0}, {"type": "train", "it": 20, "loss": 2.5}, "{pas du json",
+             {"type": "eval", "it": 0, "val_loss": 3.6}, {"type": "eval", "it": 100, "val_loss": 2.0},
+             {"type": "eval", "it": 200, "val_loss": 1.9}, {"type": "eval", "it": 200, "val_loss": 1.95}]   # doublon : le dernier gagne
+    p.write_text("\n".join(l if isinstance(l, str) else json.dumps(l) for l in lines))
+    train, val = read_log(str(p))
+    assert train == {10: 3.0, 20: 2.5} and val == {0: 3.6, 100: 2.0, 200: 1.95}
+    s = log_summary(str(p))
+    assert s["val_min"] == 1.95 and s["val_min_it"] == 200 and s["n_evals"] == 3 and s["last_train_it"] == 20
+    assert read_log(str(tmp_path / "absent.jsonl")) == ({}, {})
+    png = tmp_path / "loss.png"
+    make_loss_plot(str(p), str(png))
+    assert png.exists() and png.stat().st_size > 5000
+
+
+def test_run_eval_caches_and_extract_openqa(tmp_path):
+    from release_tools import extract_openqa, run_eval
+    script = tmp_path / "fake_eval.py"
+    script.write_text('import json\nprint("bruit de chargement")\nprint(json.dumps({"n": 5, "f1": 0.5}))\n')
+    d = str(tmp_path / "evals")
+    text, js = run_eval([str(script)], "qa", d)
+    assert js == {"n": 5, "f1": 0.5} and (tmp_path / "evals" / "qa.json").exists()
+    script.write_text("raise SystemExit(1)")                      # si le cache marche, le script cassé n'est pas relancé
+    text2, js2 = run_eval([str(script)], "qa", d)
+    assert js2 == {"n": 5, "f1": 0.5}
+    assert run_eval([str(script)], "autre", d)[0] is None         # un échec est signalé, pas masqué
+    raw = "avertissement torch\n" + "=" * 72 + "\nMiniLLM v2 — OPEN QA\n[1/2]\nQ : x\nA : y {z}\n"
+    assert extract_openqa(raw).startswith("=" * 72) and "avertissement" not in extract_openqa(raw)

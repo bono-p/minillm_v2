@@ -1,5 +1,13 @@
 # Changelog — MiniLLM v2 (refonte après audit)
 
+## Publication v2.2 (branche `v2.1.1`)
+
+* **`release_tools.py`** : nom du dépôt (même nomenclature que v2.1, vérifiée : reproduit exactement `miniLLM_v2.1-49M-42500it_2.79Btoks_0.9ep_20261001`), graphiques de loss au style publié, résumé de log (tolère doublons et lignes corrompues), cache des évaluations, fiche de chiffres LUS dans les checkpoints / logs / meta (jamais recopiés à la main).
+* **`export_hf.py`** : export `safetensors` + `config.json` + `generation_config.json` + test de fumée, repris de la cellule d'export déjà validée sur v2.1 (refus si poids liés incohérents ; écart max vs checkpoint contrôlé).
+* **`release/`** : fichiers fixes du dépôt publié (LICENSE, `inference.py` v2.2, bannière, badges, icône).
+* **Fait mesuré** : 28 des 337 questions ouvertes figurent mot pour mot dans les données synthétiques du SFT (`release_tools.test_question_overlap`) — à indiquer dans le README, car cela relativise les scores « connaissances de base ».
+* **Notebook** `colab/Publier_v2_2.ipynb` : évaluations officielles de C, graphiques, fiche, export, puis publication dans un NOUVEAU dépôt (`UPLOAD = True`).
+
 ## SFT v3.2 — ablation A/B/C/D (branche `v2.1.1`)
 
 Constat : le SFT v3.1 (+8 000 exemples synthétiques, source GPT-4 FR) n'a pas amélioré le modèle — calcul toujours non appris (0-7 %), persona 95 % → 59 %, régressions sur des faits simples, définitions qui s'effondrent sur une même phrase, réponses de refus (« Je suis désolé, je ne peux pas générer de texte »).
