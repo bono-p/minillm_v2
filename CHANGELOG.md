@@ -1,5 +1,12 @@
 # Changelog — MiniLLM v2 (refonte après audit)
 
+## Résultats lr / graines (SFT_lr_seeds, 6 modèles) et attribution du gain
+
+* **Bruit entre graines (C, Cs1, Cs2)** : persona EM 98,5-100 %, qa F1 38,6-39,4, basics 61,1-66,7 %, connaissances 18,1-20,6 %, « fin correcte » 79,3-87,0 % (donc une différence de « fin correcte » < 8 points n'est pas crédible).
+* **Learning rate plus bas (5e-5, 3e-5)** : meilleure val_loss (1,832 / 1,835 contre 1,876-1,878 à 1e-4, bien au-delà de l'écart entre graines de 0,002) mais persona EM 88,6 % / 28,0 %, basics 50 % et connaissances sans amélioration (16,7 / 17,2 %). La val_loss ne prédit pas la qualité, encore une fois ; l'hypothèse « moins de dérive, plus de savoir conservé » n'est pas confirmée. Pistes LoRA / lr bas abandonnées.
+* **Connaissances** : modèle publié 10,8 % contre 18-21 % pour la recette C (3 graines). Pré-entraînement et recette de SFT diffèrent à la fois : `compare_knowledge.py` (comparaison appariée par test exact de McNemar, cache par checkpoint) et `colab/Attribution_connaissances.ipynb` testent A/B/D pour séparer les deux.
+* `knowledge_eval.py` écrit maintenant `ok_ids` (questions réussies) et expose `mcnemar_exact`. `Publier_v2_2.ipynb` inclut l'évaluation de connaissances dans la fiche.
+
 ## Mesure plus fine + bruit entre graines (branche `v2.1.1`)
 
 * **Publication v2.2, passe 1 vérifiée sur Colab** : export sans écart (113 tenseurs, `max_diff` 0), poids liés confirmés (`tok_emb` = `lm_head`), test de fumée OK avec `inference.py` seul. Correctif : `__pycache__` créé par le test de fumée n'est plus envoyé sur Hugging Face. `make_banner.py` régénère la bannière avec de vraies réponses du modèle (l'ancienne affichait « 2 + 3 ? » → « 4 », que C ne produit pas).

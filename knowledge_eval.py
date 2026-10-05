@@ -227,6 +227,20 @@ def wilson(k: int, n: int, z: float = 1.96) -> Tuple[float, float]:
     return max(0.0, c - h), min(1.0, c + h)
 
 
+def mcnemar_exact(ids_a: List[int], ids_b: List[int]) -> Tuple[int, int, float]:
+    """Comparaison APPARIÉE de deux modèles sur les mêmes questions (indices des questions réussies).
+    Renvoie (a seul juste, b seul juste, p-valeur bilatérale du test exact de McNemar). Plus fin que de comparer deux
+    intervalles de confiance : seules comptent les questions où les deux modèles diffèrent."""
+    sa, sb = set(ids_a), set(ids_b)
+    only_a, only_b = len(sa - sb), len(sb - sa)
+    n = only_a + only_b
+    if n == 0:
+        return 0, 0, 1.0
+    kmin = min(only_a, only_b)
+    tail = sum(math.comb(n, i) for i in range(kmin + 1)) / 2 ** n
+    return only_a, only_b, min(1.0, 2 * tail)
+
+
 def leakage() -> List[str]:
     """Questions de ce test qui sortent d'un générateur du SFT (synthétique ancien, synthetic_plus plein et allégé, personnalité)."""
     import os
@@ -271,16 +285,20 @@ def main():
 
     model, tok, _ = load_model(a.ckpt, device=a.device)
     results: Dict[str, List[bool]] = defaultdict(list)
+    ok_ids: List[int] = []
     shown = 0
-    for cat, q, accepted in KNOWLEDGE:
+    for idx, (cat, q, accepted) in enumerate(KNOWLEDGE):
         reply = chat_reply(model, tok, [{"role": "user", "content": q}], max_new_tokens=60,
                            temperature=0.0, repetition_penalty=1.0)
         ok = is_correct(reply, accepted)
         results[cat].append(ok)
+        if ok:
+            ok_ids.append(idx)
         if not ok and shown < 6:
             print(f"  ✗ [{cat}] {q}\n      attendu : {accepted[0]} | obtenu : {reply[:90]}")
             shown += 1
     res = summarize(results)
+    res["ok_ids"] = ok_ids                                  # pour la comparaison appariée (mcnemar_exact)
     for cat, d in res["par_categorie"].items():
         print(f"  {cat:<14} {d['acc'] * 100:5.1f} %  (n={d['n']})")
     print(f"knowledge : {res['correct']}/{res['n']} = {res['knowledge'] * 100:.1f} %  IC95 [{res['ci95'][0] * 100:.1f} ; {res['ci95'][1] * 100:.1f}]")

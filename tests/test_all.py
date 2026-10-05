@@ -905,3 +905,37 @@ def test_banner_renderer_wraps_real_answers_and_keeps_size(tmp_path):
                                             ("Combien font 2 plus 3 ?", "2 plus 3 font 10.", "// faux, assumé")])
     im = Image.open(dst)
     assert im.size == (2000, 600) and len(set(im.crop((1195, 150, 1855, 485)).getdata())) > 5     # du texte a bien été dessiné
+
+
+def test_mcnemar_exact_matches_hand_computed_values():
+    from knowledge_eval import mcnemar_exact
+    a, b, p = mcnemar_exact(list(range(0, 10)), list(range(9, 10)))      # a seul : 0-8 (9 questions) ; b seul : aucune
+    assert (a, b) == (9, 0) and abs(p - 2 / 2 ** 9) < 1e-12
+    a, b, p = mcnemar_exact([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [9, 10])    # a seul : 0..8 (9), b seul : 10 (1)
+    assert (a, b) == (9, 1) and abs(p - 2 * 11 / 1024) < 1e-12
+    assert mcnemar_exact([1, 2], [1, 2]) == (0, 0, 1.0)
+    assert mcnemar_exact([1, 2, 3], [4, 5, 6])[2] == 1.0                  # 3 contre 3 : aucun écart
+
+
+def test_compare_knowledge_caches_and_formats(tmp_path):
+    import json
+    import compare_knowledge as ck
+    ckpt = tmp_path / "m.pt"
+    ckpt.write_text("x")
+    calls = []
+
+    def fake(args):
+        calls.append(args)
+        return "bruit\n" + json.dumps({"n": 10, "correct": 3, "knowledge": 0.3, "ci95": [0.1, 0.6], "ok_ids": [0, 1, 2]}), True
+
+    out = str(tmp_path / "ev")
+    d1 = ck.evaluate("M", str(ckpt), out, runner=fake)
+    d2 = ck.evaluate("M", str(ckpt), out, runner=fake)                    # relu depuis le cache : pas de 2e appel
+    assert d1 == d2 and len(calls) == 1
+    ckpt.write_text("checkpoint modifié")                                # signature différente -> réévalué
+    ck.evaluate("M", str(ckpt), out, runner=fake)
+    assert len(calls) == 2
+    assert ck.evaluate("X", str(ckpt), out, runner=lambda a: ("pas de json", True)) is None
+    ref = {"n": 10, "correct": 1, "knowledge": 0.1, "ci95": [0.0, 0.4], "ok_ids": [0]}
+    t = ck.table({"REF": ref, "M": d1}, "REF")
+    assert "(réf.)" in t and "+20.0" in t and "2/0" in t
