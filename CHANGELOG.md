@@ -1,5 +1,13 @@
 # Changelog — MiniLLM v2 (refonte après audit)
 
+## Mesure plus fine + bruit entre graines (branche `v2.1.1`)
+
+* **`knowledge_eval.py`** : 204 questions de connaissances (48 capitales absentes du SFT, 10 chefs-lieux de régions du Cameroun, géographie, sciences, animaux, nombres, langue, culture, informatique) avec intervalle de confiance de Wilson. Vérifié par test : aucun doublon, aucune question issue des générateurs du SFT (`leakage()`).
+* **`basics_eval.is_correct`** : accepte les ligatures (« sœur » = « soeur », « cœur » = « coeur ») ; avant, une bonne réponse avec « œ » était comptée fausse.
+* **`compare_sft.py`** : colonne `know±` (taux et demi-largeur de l'IC95) ; `--noise_group C,Cs1,Cs2` affiche l'étendue de chaque mesure entre graines.
+* **Notebook** `colab/SFT_lr_seeds.ipynb` : C relancé avec 2 autres graines (bruit) et avec lr 5e-5 / 3e-5 (moins de dérive ?), mêmes données `sft_C`.
+* Constat : le SFT enseigne 70 capitales et 42 faits ; `basics_eval` (36 questions) teste surtout ce qui est enseigné, d'où `knowledge_eval`.
+
 ## Publication v2.2 (branche `v2.1.1`)
 
 * **`release_tools.py`** : nom du dépôt (même nomenclature que v2.1, vérifiée : reproduit exactement `miniLLM_v2.1-49M-42500it_2.79Btoks_0.9ep_20261001`), graphiques de loss au style publié, résumé de log (tolère doublons et lignes corrompues), cache des évaluations, fiche de chiffres LUS dans les checkpoints / logs / meta (jamais recopiés à la main).

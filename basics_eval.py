@@ -58,7 +58,7 @@ BASICS: List[Tuple[str, List[str]]] = [
 
 def _fold(text: str) -> str:
     """minuscules, sans accents, apostrophes normalisées."""
-    t = unicodedata.normalize("NFKD", text.lower().replace("’", "'"))
+    t = unicodedata.normalize("NFKD", text.lower().replace("’", "'").replace("œ", "oe").replace("æ", "ae"))
     return "".join(c for c in t if not unicodedata.combining(c))
 
 

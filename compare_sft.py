@@ -97,6 +97,9 @@ def evaluate_one(ckpt: str, val_dir: str, qa_n: int = 300) -> Dict[str, object]:
     out: Dict[str, object] = {}
     out["persona"] = last_json(_run(["evaluate.py", "persona", "--ckpt", ckpt])) or {}
     out["qa"] = last_json(_run(["evaluate.py", "qa", "--ckpt", ckpt, "--sft_dir", val_dir, "--n", str(qa_n)])) or {}
+    raw_k = _run(["knowledge_eval.py", "--ckpt", ckpt])
+    out["knowledge_raw"] = raw_k
+    out["knowledge"] = last_json(raw_k) or {}
     raw_b = _run(["basics_eval.py", "--ckpt", ckpt])
     out["basics_raw"] = raw_b                                           # contient les questions ratées : voir evals/basics_<nom>.txt
     out["basics"] = last_json(raw_b) or {}
@@ -110,6 +113,27 @@ def _pct(x) -> str:
     return "  -  " if x is None else f"{x * 100:5.1f}"
 
 
+def _know(k: Dict) -> str:
+    """« 16.2±5 » : taux de réussite et demi-largeur de l'intervalle de confiance à 95 %."""
+    if not k or k.get("knowledge") is None:
+        return "-"
+    lo, hi = k.get("ci95", [k["knowledge"], k["knowledge"]])
+    return f"{k['knowledge'] * 100:.1f}±{(hi - lo) * 50:.0f}"
+
+
+def noise_lines(results: Dict[str, Dict[str, object]], names: List[str]) -> List[str]:
+    """Étendue (max − min, en points) de chaque mesure sur un groupe de modèles censés être équivalents (graines différentes) :
+    une différence entre deux recettes n'est crédible que si elle dépasse cette étendue."""
+    picks = {"persona EM": lambda r: r["persona"].get("exact_match"), "qa F1": lambda r: r["qa"].get("f1"),
+             "basics": lambda r: r["basics"].get("basics"), "knowledge": lambda r: r.get("knowledge", {}).get("knowledge")}
+    lines = []
+    for label, get in picks.items():
+        vals = [get(results[n]) for n in names if n in results and get(results[n]) is not None]
+        if len(vals) >= 2:
+            lines.append(f"  {label:<11} de {min(vals) * 100:5.1f} à {max(vals) * 100:5.1f}  -> étendue {(max(vals) - min(vals)) * 100:4.1f} pts ({len(vals)} modèles)")
+    return lines
+
+
 def _cnt(x) -> str:
     return "-" if x is None else str(x)
 
@@ -119,13 +143,13 @@ def _f1(x) -> str:
 
 
 def table(results: Dict[str, Dict[str, object]]) -> str:
-    head = f"{'modèle':<10} {'pers.EM':>7} {'pers.F1':>7} {'qa.EM':>6} {'qa.F1':>6} {'fin ok':>6} {'basics':>6} {'top5g':>6} {'refus':>5} {'boucles':>7}"
+    head = f"{'modèle':<10} {'pers.EM':>7} {'pers.F1':>7} {'qa.EM':>6} {'qa.F1':>6} {'fin ok':>6} {'basics':>6} {'know±':>8} {'top5g':>6} {'refus':>5} {'boucles':>7}"
     lines = [head, "-" * len(head)]
     for name, r in results.items():
         p, q, b, o = r["persona"], r["qa"], r["basics"], r["openqa"]
         lines.append(f"{name:<10} {_pct(p.get('exact_match')):>7} {_f1(p.get('f1_moyen')):>7} "
                      f"{_pct(q.get('exact_match')):>6} {_f1(q.get('f1')):>6} {_pct(q.get('ends_properly')):>6} "
-                     f"{_pct(b.get('basics')):>6} {_cnt(o.get('top5g')):>6} {_cnt(o.get('refusals')):>5} {_cnt(o.get('loops')):>7}")
+                     f"{_pct(b.get('basics')):>6} {_know(r.get('knowledge', {})):>8} {_cnt(o.get('top5g')):>6} {_cnt(o.get('refusals')):>5} {_cnt(o.get('loops')):>7}")
     return "\n".join(lines)
 
 
@@ -145,6 +169,7 @@ def main():
     ap.add_argument("--val_dir", required=True, help="dossier de validation SFT COMMUN à tous les modèles")
     ap.add_argument("--out_dir", default="evals")
     ap.add_argument("--qa_n", type=int, default=300)
+    ap.add_argument("--noise_group", default="", help="noms séparés par des virgules (ex. C,Cs1,Cs2) : affiche l'étendue de chaque mesure sur ces modèles")
     ap.add_argument("--tokenizer", default=None, help="tokenizer.json (par défaut : celui du dossier data/, parent de --val_dir)")
     a = ap.parse_args()
     os.makedirs(a.out_dir, exist_ok=True)
@@ -166,9 +191,14 @@ def main():
             continue
         with open(os.path.join(a.out_dir, f"openqa_{name}.txt"), "w", encoding="utf-8") as f:
             f.write(results[name].pop("openqa_raw"))                       # type: ignore[arg-type]
+        with open(os.path.join(a.out_dir, f"knowledge_{name}.txt"), "w", encoding="utf-8") as f:
+            f.write(results[name].pop("knowledge_raw"))                    # type: ignore[arg-type]
         with open(os.path.join(a.out_dir, f"basics_{name}.txt"), "w", encoding="utf-8") as f:
             f.write(results[name].pop("basics_raw"))                       # type: ignore[arg-type]
     print("\n" + table(results))
+    group = [g for g in a.noise_group.split(",") if g]
+    if len(group) >= 2:
+        print("\nBruit entre graines (" + ", ".join(group) + ") :\n" + "\n".join(noise_lines(results, group)))
     print("\nPhrase la plus reprise d'une réponse à l'autre :\n" + "\n".join(top_phrase_lines(results)))
     print("\nLecture : pers.EM haut = identité mémorisée ; basics haut = faits conservés ; top5g haut = une même phrase "
           "revient dans beaucoup de réponses (effondrement) ; refus/boucles = défauts à éviter.")

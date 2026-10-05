@@ -865,3 +865,31 @@ def test_run_eval_caches_and_extract_openqa(tmp_path):
     assert run_eval([str(script)], "autre", d)[0] is None         # un échec est signalé, pas masqué
     raw = "avertissement torch\n" + "=" * 72 + "\nMiniLLM v2 — OPEN QA\n[1/2]\nQ : x\nA : y {z}\n"
     assert extract_openqa(raw).startswith("=" * 72) and "avertissement" not in extract_openqa(raw)
+
+
+# ── test de connaissances tenues hors du SFT + comparaison avec bruit ───────────────────────────────────────────────────────
+def test_knowledge_set_is_clean_and_held_out():
+    from collections import Counter
+    import knowledge_eval as ke
+    from synthetic_plus import norm_q
+    assert len(ke.KNOWLEDGE) >= 150
+    qs = [norm_q(q) for _, q, _ in ke.KNOWLEDGE]
+    assert len(qs) == len(set(qs)), "questions en double"
+    assert all(a and all(x.strip() for x in a) for _, _, a in ke.KNOWLEDGE)
+    assert ke.leakage() == [], "une question du test sort d'un générateur du SFT"
+    assert Counter(c for c, _, _ in ke.KNOWLEDGE)["capitales"] >= 40
+
+
+def test_knowledge_scoring_wilson_and_noise_helpers():
+    import knowledge_eval as ke
+    from basics_eval import is_correct
+    from compare_sft import _know, noise_lines
+    assert is_correct("Sa sœur.", ["soeur"]) and is_correct("Le cœur.", ["coeur"]) and not is_correct("16 côtés", ["6"])
+    lo, hi = ke.wilson(30, 190)
+    assert 0.11 < lo < 0.16 < hi < 0.22 and ke.wilson(0, 0) == (0.0, 0.0)
+    res = ke.summarize({"a": [True, False], "b": [True, True]})
+    assert res["n"] == 4 and res["correct"] == 3 and res["par_categorie"]["a"]["acc"] == 0.5
+    assert _know({}) == "-" and _know({"knowledge": 0.2, "ci95": [0.15, 0.26]}).startswith("20.0±")
+    r = {"persona": {"exact_match": 0.99}, "qa": {"f1": 0.33}, "basics": {"basics": 0.6}, "knowledge": {"knowledge": 0.2}}
+    r2 = {**r, "basics": {"basics": 0.64}}
+    assert any("étendue  4.0" in l for l in noise_lines({"A": r, "B": r2}, ["A", "B"]))
