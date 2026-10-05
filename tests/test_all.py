@@ -893,3 +893,15 @@ def test_knowledge_scoring_wilson_and_noise_helpers():
     r = {"persona": {"exact_match": 0.99}, "qa": {"f1": 0.33}, "basics": {"basics": 0.6}, "knowledge": {"knowledge": 0.2}}
     r2 = {**r, "basics": {"basics": 0.64}}
     assert any("étendue  4.0" in l for l in noise_lines({"A": r, "B": r2}, ["A", "B"]))
+
+
+def test_banner_renderer_wraps_real_answers_and_keeps_size(tmp_path):
+    from PIL import Image
+    import make_banner
+    src = tmp_path / "src.png"
+    Image.new("RGB", (2000, 600), (20, 20, 31)).save(src)
+    dst = tmp_path / "out.png"
+    make_banner.render(str(src), str(dst), [("Qui es-tu ?", "Je suis MiniLLM, un petit modèle de langage qui essaie de répondre à tes questions en français.", ""),
+                                            ("Combien font 2 plus 3 ?", "2 plus 3 font 10.", "// faux, assumé")])
+    im = Image.open(dst)
+    assert im.size == (2000, 600) and len(set(im.crop((1195, 150, 1855, 485)).getdata())) > 5     # du texte a bien été dessiné

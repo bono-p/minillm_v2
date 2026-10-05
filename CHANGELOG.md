@@ -2,6 +2,9 @@
 
 ## Mesure plus fine + bruit entre graines (branche `v2.1.1`)
 
+* **Publication v2.2, passe 1 vérifiée sur Colab** : export sans écart (113 tenseurs, `max_diff` 0), poids liés confirmés (`tok_emb` = `lm_head`), test de fumée OK avec `inference.py` seul. Correctif : `__pycache__` créé par le test de fumée n'est plus envoyé sur Hugging Face. `make_banner.py` régénère la bannière avec de vraies réponses du modèle (l'ancienne affichait « 2 + 3 ? » → « 4 », que C ne produit pas).
+* `SFT_lr_seeds.ipynb` compare maintenant aussi le modèle publié (PUB).
+
 * **`knowledge_eval.py`** : 204 questions de connaissances (48 capitales absentes du SFT, 10 chefs-lieux de régions du Cameroun, géographie, sciences, animaux, nombres, langue, culture, informatique) avec intervalle de confiance de Wilson. Vérifié par test : aucun doublon, aucune question issue des générateurs du SFT (`leakage()`).
 * **`basics_eval.is_correct`** : accepte les ligatures (« sœur » = « soeur », « cœur » = « coeur ») ; avant, une bonne réponse avec « œ » était comptée fausse.
 * **`compare_sft.py`** : colonne `know±` (taux et demi-largeur de l'IC95) ; `--noise_group C,Cs1,Cs2` affiche l'étendue de chaque mesure entre graines.

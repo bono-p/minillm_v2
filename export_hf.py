@@ -81,7 +81,9 @@ def smoke_test(out_dir: str, tokenizer_path: str, questions=("Qui es-tu ?", "Que
     m = inference.load_model(os.path.join(out_dir, "model.safetensors"), os.path.join(out_dir, "config.json"),
                              device="cpu", dtype="fp32")
     tk = inference.MiniTokenizer(tokenizer_path)
-    return {q: inference.chat_reply(m, tk, [{"role": "user", "content": q}], temperature=0.0) for q in questions}
+    out = {q: inference.chat_reply(m, tk, [{"role": "user", "content": q}], temperature=0.0) for q in questions}
+    shutil.rmtree(os.path.join(out_dir, "__pycache__"), ignore_errors=True)       # ne pas publier le cache Python
+    return out
 
 
 def assemble_static(out_dir: str, release_dir: str, tokenizer_path: str, extra: Optional[Dict[str, str]] = None) -> None:
