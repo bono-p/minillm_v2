@@ -67,6 +67,19 @@ def table(results: Dict[str, Dict], ref: str) -> str:
     return "\n".join(lines)
 
 
+def category_table(results: Dict[str, Dict]) -> str:
+    """Réussite (%) par catégorie et par modèle : sépare connaissances du monde et questions de langue."""
+    cats = sorted({c for d in results.values() for c in d.get("par_categorie", {})})
+    names = list(results)
+    head = f"{'catégorie':<14} {'n':>3} " + " ".join(f"{n:>6}" for n in names)
+    lines = [head, "-" * len(head)]
+    for c in cats:
+        n = next((d["par_categorie"][c]["n"] for d in results.values() if c in d.get("par_categorie", {})), 0)
+        lines.append(f"{c:<14} {n:>3} " + " ".join(
+            f"{results[m]['par_categorie'][c]['acc'] * 100:6.1f}" if c in results[m].get("par_categorie", {}) else f"{'-':>6}" for m in names))
+    return "\n".join(lines)
+
+
 def main():
     ap = argparse.ArgumentParser(description="MiniLLM — connaissances : comparaison appariée (McNemar)")
     ap.add_argument("--ckpt", action="append", required=True, help="NOM=chemin (répétable) ; le 1er est la référence")
@@ -90,6 +103,7 @@ def main():
             ref = ref or name
     if results:
         print("\n" + table(results, ref))
+        print("\nRéussite par catégorie (%) :\n" + category_table(results))
         print("\n+/- = questions réussies par ce modèle seulement / par la référence seulement ; p = test exact de McNemar "
               "(p < 0,05 : l'écart n'est probablement pas dû au hasard des questions).")
 

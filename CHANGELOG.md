@@ -1,5 +1,12 @@
 # Changelog — MiniLLM v2 (refonte après audit)
 
+## Publication v2.2 : README, fichiers d'évaluation, test de connaissances publié
+
+* `release/v2.2/README.md` : fiche du modèle v2.2 ; tous les chiffres viennent de la fiche, des logs et des évaluations (exemples de réponses extraits mot pour mot de `openqa.txt`). Mesuré pour la transparence : 28 des 337 questions ouvertes (dont 10 des 11 questions de capitales) et 22 des 36 connaissances de base figurent dans les données synthétiques du SFT ; 39 des 45 questions de langue du test de connaissances reprennent un type de question enseigné.
+* `release/v2.2/evals_extra.md` + `release_tools.build_evals_md` : `resultats_automatiques.md` est généré depuis les sorties d'évaluation (plus de recopie manuelle) ; `knowledge_questions_md` publie les 204 questions.
+* `compare_knowledge.py` affiche la réussite par catégorie (connaissances du monde / langue).
+* `Publier_v2_2.ipynb` : date de publication figée (`RELEASE_DATE`), contrôle que le README cite le nom de dépôt calculé, génère README, évals, test et QA avant l'envoi.
+
 ## Résultats lr / graines (SFT_lr_seeds, 6 modèles) et attribution du gain
 
 * **Bruit entre graines (C, Cs1, Cs2)** : persona EM 98,5-100 %, qa F1 38,6-39,4, basics 61,1-66,7 %, connaissances 18,1-20,6 %, « fin correcte » 79,3-87,0 % (donc une différence de « fin correcte » < 8 points n'est pas crédible).

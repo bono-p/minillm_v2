@@ -221,3 +221,101 @@ def extract_openqa(text: str) -> str:
         if ln.startswith("=" * 20):
             return "\n".join(lines[k:]).rstrip() + "\n"
     return text
+
+
+
+# ── fichiers de résultats publiés (générés depuis les sorties d'évaluation, jamais recopiés à la main) ─────────────────────────────
+_V21 = {"n": 455, "exact_match": 0.0681, "f1": 0.3108, "ends_properly": 0.8725}
+_DEMO_CHECKS = {"Combien font 12 plus 7 ?": ["19", "dix-neuf"], "Quel jour vient après le mardi ?": ["mercredi"],
+                "Quelle est la capitale du Cameroun ?": ["yaounde"], "Quel est le contraire de grand ?": ["petit"],
+                "Combien de jours y a-t-il dans une semaine ?": ["sept", "7"]}
+
+
+def _json_block(d) -> str:
+    return "```json\n" + json.dumps(d, ensure_ascii=False, indent=2) + "\n```"
+
+
+def parse_demo(text: str):
+    """[(question, réponse)] depuis la sortie de `evaluate.py demo` (blocs « Toi : … / MiniLLM : … » séparés par une ligne vide)."""
+    out = []
+    for block in re.split(r"\n\s*\n", text.strip()):
+        m = re.match(r"Toi\s*: (.*?)\nMiniLLM\s*: (.*)\Z", block.strip(), flags=re.S)
+        if m:
+            out.append((m.group(1).strip(), m.group(2).strip()))
+    return out
+
+
+def parse_persona(text: str):
+    """[(ok, question, attendu, obtenu)] depuis la sortie de `evaluate.py persona`."""
+    return [(m.group(1) == "✓", m.group(2).strip(), m.group(3).strip(), m.group(4).strip()) for m in
+            re.finditer(r"^([✓✗]) (.*)\n\s+attendu : (.*)\n\s+obtenu\s+: (.*)$", text, flags=re.M)]
+
+
+def build_evals_md(eval_dir: str, extra_md_path: Optional[str] = None, version: str = "2.2") -> str:
+    """resultats_automatiques.md : sections 1-6 lues dans eval_dir (qa/persona/basics/skills/knowledge .json, persona/demo .txt) ;
+    sections suivantes = texte fixe `extra_md_path` (comparaisons déjà mesurées)."""
+    from basics_eval import is_correct
+
+    def load(name):
+        return _load_json(os.path.join(eval_dir, name + ".json"))
+
+    def read(name):
+        p = os.path.join(eval_dir, name + ".txt")
+        return open(p, encoding="utf-8").read() if os.path.exists(p) else ""
+
+    out = [f"# Résultats des évaluations automatiques — miniLLM v{version} (49M)", "",
+           "Checkpoint évalué : SFT, **dernier checkpoint** (pas le minimum de `val_loss`), sur le pré-entraînement à 50 200 itérations.", ""]
+    qa, pe, ba, sk, kn = load("qa"), load("persona"), load("basics"), load("skills"), load("knowledge")
+    if qa:
+        out += ["## 1. Jeu de validation du SFT (exemples avec réponse de référence)", "", _json_block(qa), "",
+                f"**Ce jeu n'est pas celui de la v2.1** (v2.1 : n = {_V21['n']}, Exact Match {_V21['exact_match'] * 100:.1f} %, F1 {_V21['f1']:.3f}, "
+                f"fins correctes {_V21['ends_properly'] * 100:.1f} %) : les deux ne sont pas comparables. Celui-ci contient des exemples synthétiques du même type "
+                "que l'entraînement. L'Exact Match est très pénalisant pour des réponses ouvertes : une réponse correcte mais reformulée compte comme fausse.", ""]
+    if pe:
+        out += ["## 2. Persona (identité de MiniLLM)", "", _json_block(pe), "",
+                "**Attention :** ces 132 exemples font partie des données d'entraînement SFT (répétés 10 fois). Ce score mesure la fidélité d'apprentissage "
+                "de la persona, pas la généralisation.", ""]
+        bad = [r for r in parse_persona(read("persona")) if not r[0]]
+        if bad:
+            out += ["Réponses non strictement identiques à la référence :", "", "| Question | Attendu | Obtenu |", "|---|---|---|"]
+            out += [f"| {q} | {a} | {o} |" for _, q, a, o in bad]
+            out.append("")
+    if ba:
+        out += ["## 3. Connaissances de base (36 questions)", "", _json_block(ba), "",
+                "22 de ces 36 questions figurent mot pour mot dans les données synthétiques du SFT : test de régression, pas de généralisation.", ""]
+    if sk:
+        out += ["## 4. Compétences chiffrées sur des problèmes tenus à l'écart de l'entraînement", "", _json_block(sk), "",
+                "Environ 10 % des problèmes chiffrés sont exclus de tout le SFT. Réponse juste = le dernier nombre de la réponse est le bon résultat. "
+                "Le modèle imite le format d'un calcul sans le calculer.", ""]
+    if kn:
+        out += ["## 5. Test de connaissances (204 questions hors SFT)", "",
+                f"**{kn['correct']}/{kn['n']} = {kn['knowledge'] * 100:.1f} %**, intervalle de confiance à 95 % : "
+                f"[{kn['ci95'][0] * 100:.1f} ; {kn['ci95'][1] * 100:.1f}].", "", "| catégorie | questions | réussite |", "|---|---|---|"]
+        out += [f"| {c} | {d['n']} | {d['acc'] * 100:.1f} % |" for c, d in kn["par_categorie"].items()]
+        out += ["", "La liste des questions et des réponses acceptées est dans [`test_connaissances.md`](./test_connaissances.md).", ""]
+    demo = parse_demo(read("demo"))
+    if demo:
+        out += ["## 6. Test de conversation rapide", "", "Température 0,5, top-k 30, top-p 0,9, pénalité de répétition 1,1, graine 0. ✗ = réponse fausse sur un point vérifiable.", "",
+                "| Toi | MiniLLM |", "|---|---|"]
+        for q, a in demo:
+            a = a.strip().replace("\n", " ")
+            mark = " ✗" if q in _DEMO_CHECKS and not is_correct(a, _DEMO_CHECKS[q]) else ""
+            out.append(f"| {q} | {a}{mark} |")
+        out.append("")
+    if extra_md_path and os.path.exists(extra_md_path):
+        out += [open(extra_md_path, encoding="utf-8").read().rstrip(), ""]
+    return "\n".join(out)
+
+
+def knowledge_questions_md() -> str:
+    from knowledge_eval import KNOWLEDGE
+    lines = ["# Test de connaissances — 204 questions", "",
+             "Aucune de ces questions n'est produite par les générateurs de données du SFT (vérifié automatiquement). Une réponse est comptée juste "
+             "si l'un des mots attendus figure dans la réponse comme **mot entier**, accents et casse ignorés.", ""]
+    cat = None
+    for c, q, a in KNOWLEDGE:
+        if c != cat:
+            lines += ["", f"## {c}", "", "| question | réponses acceptées |", "|---|---|"]
+            cat = c
+        lines.append(f"| {q} | {' ; '.join(a)} |")
+    return "\n".join(lines) + "\n"
