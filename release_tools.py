@@ -231,6 +231,11 @@ _DEMO_CHECKS = {"Combien font 12 plus 7 ?": ["19", "dix-neuf"], "Quel jour vient
                 "Combien de jours y a-t-il dans une semaine ?": ["sept", "7"]}
 
 
+def _fr(x, nd: int = 1) -> str:
+    """Nombre au format français (virgule décimale) pour le texte ; les blocs JSON gardent le point."""
+    return f"{x:.{nd}f}".replace(".", ",")
+
+
 def _json_block(d) -> str:
     return "```json\n" + json.dumps(d, ensure_ascii=False, indent=2) + "\n```"
 
@@ -268,8 +273,8 @@ def build_evals_md(eval_dir: str, extra_md_path: Optional[str] = None, version: 
     qa, pe, ba, sk, kn = load("qa"), load("persona"), load("basics"), load("skills"), load("knowledge")
     if qa:
         out += ["## 1. Jeu de validation du SFT (exemples avec réponse de référence)", "", _json_block(qa), "",
-                f"**Ce jeu n'est pas celui de la v2.1** (v2.1 : n = {_V21['n']}, Exact Match {_V21['exact_match'] * 100:.1f} %, F1 {_V21['f1']:.3f}, "
-                f"fins correctes {_V21['ends_properly'] * 100:.1f} %) : les deux ne sont pas comparables. Celui-ci contient des exemples synthétiques du même type "
+                f"**Ce jeu n'est pas celui de la v2.1** (v2.1 : n = {_V21['n']}, Exact Match {_fr(_V21['exact_match'] * 100)} %, F1 {_fr(_V21['f1'], 3)}, "
+                f"fins correctes {_fr(_V21['ends_properly'] * 100)} %) : les deux ne sont pas comparables. Celui-ci contient des exemples synthétiques du même type "
                 "que l'entraînement. L'Exact Match est très pénalisant pour des réponses ouvertes : une réponse correcte mais reformulée compte comme fausse.", ""]
     if pe:
         out += ["## 2. Persona (identité de MiniLLM)", "", _json_block(pe), "",
@@ -278,7 +283,7 @@ def build_evals_md(eval_dir: str, extra_md_path: Optional[str] = None, version: 
         bad = [r for r in parse_persona(read("persona")) if not r[0]]
         if bad:
             out += ["Réponses non strictement identiques à la référence :", "", "| Question | Attendu | Obtenu |", "|---|---|---|"]
-            out += [f"| {q} | {a} | {o} |" for _, q, a, o in bad]
+            out += [f"| {q} | {a} | {o}{'…' if len(o) >= 95 else ''} |" for _, q, a, o in bad]
             out.append("")
     if ba:
         out += ["## 3. Connaissances de base (36 questions)", "", _json_block(ba), "",
@@ -289,9 +294,9 @@ def build_evals_md(eval_dir: str, extra_md_path: Optional[str] = None, version: 
                 "Le modèle imite le format d'un calcul sans le calculer.", ""]
     if kn:
         out += ["## 5. Test de connaissances (204 questions hors SFT)", "",
-                f"**{kn['correct']}/{kn['n']} = {kn['knowledge'] * 100:.1f} %**, intervalle de confiance à 95 % : "
-                f"[{kn['ci95'][0] * 100:.1f} ; {kn['ci95'][1] * 100:.1f}].", "", "| catégorie | questions | réussite |", "|---|---|---|"]
-        out += [f"| {c} | {d['n']} | {d['acc'] * 100:.1f} % |" for c, d in kn["par_categorie"].items()]
+                f"**{kn['correct']}/{kn['n']} = {_fr(kn['knowledge'] * 100)} %**, intervalle de confiance à 95 % : "
+                f"[{_fr(kn['ci95'][0] * 100)} ; {_fr(kn['ci95'][1] * 100)}].", "", "| catégorie | questions | réussite |", "|---|---|---|"]
+        out += [f"| {c} | {d['n']} | {_fr(d['acc'] * 100)} % |" for c, d in kn["par_categorie"].items()]
         out += ["", "La liste des questions et des réponses acceptées est dans [`test_connaissances.md`](./test_connaissances.md).", ""]
     demo = parse_demo(read("demo"))
     if demo:

@@ -44,7 +44,7 @@ Mesures directes v2.1 → v2.2, avec le même code d'évaluation :
 Ce que ces chiffres permettent d'affirmer, et ce qu'ils ne permettent pas :
 
 - Le gain au test de connaissances est **statistiquement net** (test exact de McNemar sur les mêmes questions : p = 0,001) et se retrouve sur trois entraînements identiques à la graine près (18,1 % à 20,6 %). Il n'apparaît **pas avec le seul pré-entraînement prolongé** : une recette de SFT antérieure (15 000 exemples French Alpaca, synthétique de base, sans filtre) appliquée au nouveau pré-entraînement donne 13,7 %, non significativement différent de la v2.1 (p = 0,31). Il est associé au SFT révisé (17,6 % à 21,6 % selon les variantes testées).
-- Ce test mélange des connaissances du monde et 45 questions de langue (féminins, pluriels, contraires, synonymes, participes), dont 39 reprennent un **type de question enseigné par le SFT**, avec d'autres mots. Une part du gain reflète donc l'apprentissage de ces formats, et pas seulement du savoir. Nous n'avons pas encore séparé les deux.
+- Ce test mélange des connaissances du monde et 45 questions de langue (féminins, pluriels, contraires, synonymes, participes), dont 39 reprennent un **type de question enseigné par le SFT**, avec d'autres mots. Une part du gain reflète donc l'apprentissage de ces formats, et pas seulement du savoir. Pour la v2.2, la réussite par catégorie est : langue 35,6 % (16/45), culture 36,4 % (8/22), géographie 27,8 % (5/18), informatique 25,0 % (2/8), animaux 13,3 % (2/15), capitales absentes de l'entraînement 12,5 % (6/48), sciences 11,1 % (2/18), Cameroun 6,2 % (1/16), nombres 0 % (0/14). Les questions de langue fournissent donc 16 des 42 bonnes réponses : le gain n'est pas uniquement du savoir. La comparaison catégorie par catégorie avec la v2.1 n'a pas été faite.
 - **Aucune amélioration** en calcul : 2 bonnes réponses sur 24 questions de calcul pur, comme avant.
 - La persona à 99 % mesure la mémorisation de 132 exemples d'entraînement, pas une capacité nouvelle.
 
@@ -243,7 +243,7 @@ Les conditions matérielles peuvent donc varier légèrement d'une session à l'
 
 ## Comportement observé
 
-Le modèle produit du français grammaticalement correct et reproduit bien son identité (nom, créateur, origine). Il répond correctement à une partie des questions factuelles fréquentes : 10 des 11 questions de capitales du fichier d'évaluation reçoivent une réponse correcte (« capitale de l'Égypte » reçoit « Nubie »). Mais 10 de ces 11 questions figurent mot pour mot dans les données du SFT : il s'agit en grande partie de récitation. Sur des capitales **absentes** de l'entraînement, voir le test de connaissances ci-dessous.
+Le modèle produit du français grammaticalement correct et reproduit bien son identité (nom, créateur, origine). Il répond correctement à une partie des questions factuelles fréquentes : 10 des 11 questions de capitales du fichier d'évaluation reçoivent une réponse correcte (« capitale de l'Égypte » reçoit « Nubie »). Mais 10 de ces 11 questions figurent mot pour mot dans les données du SFT : il s'agit en grande partie de récitation. Sur les 48 capitales de pays **absents** de l'entraînement, 6 seulement sont justes (12,5 %).
 
 En revanche, sa fiabilité chute dès que la tâche demande un calcul, un raisonnement ou une définition précise. Sur les 24 questions de calcul pur du fichier d'évaluation (n° 40 à 63), deux réponses sont correctes (100 divisé par 4 et la racine carrée de 144). Sur les 10 petits problèmes (n° 64 à 73), aucune bonne réponse ; sur les 6 suites de nombres (n° 74 à 79), aucune réponse propre (deux commencent par le bon nombre avant de dériver). Sur les définitions techniques (informatique, machine learning), le modèle produit des phrases du type « X est un système de … qui permet … » dont le fond est le plus souvent faux.
 
@@ -557,6 +557,7 @@ Le modèle n'est pas conçu pour :
 Les évaluations réalisées sur ce modèle montrent notamment :
 
 - des hallucinations factuelles : environ 4 réponses sur 5 du test de connaissances sont fausses ;
+- des connaissances du monde très limitées hors de ce que le SFT enseigne : 6 capitales justes sur 48 absentes de l'entraînement, 1 bonne réponse sur 16 questions sur le Cameroun (chefs-lieux de régions compris), 0 sur 14 questions de nombres usuels (côtés des polygones, unités) ;
 - des erreurs arithmétiques, y compris sur des opérations simples (2 bonnes réponses sur 24 questions de calcul pur ; aucune sur les petits problèmes ni les suites de nombres) ;
 - des définitions techniques le plus souvent fausses, souvent formulées avec la même tournure générique (« est un ensemble de … qui permet … », « il peut être utilisé pour … ») ;
 - une persona qui déborde parfois sur d'autres sujets (par exemple, SQL, Python ou JavaScript présentés comme « développés par DevLab ») ;

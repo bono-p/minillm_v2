@@ -950,7 +950,7 @@ def test_release_v22_readme_and_evals_builder(tmp_path):
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     readme = open(os.path.join(here, "release", "v2.2", "README.md"), encoding="utf-8").read()
     assert rt.repo_name("2.2", 48_508_672, 50200, 3_289_956_352, datetime.date(2026, 10, 5)) in readme
-    assert "github" not in readme.lower() and "@@" not in readme and "TODO" not in readme
+    assert "github" not in readme.lower() and "@@" not in readme and "TODO" not in readme and "12,5 %" in readme
     for f in re.findall(r"\]\(\./([^)]+)\)", readme):
         assert f.startswith(("assets/", "evals/")) or f in ("MiniLlmQA.md", "LICENSE"), f
     # build_evals_md à partir de sorties factices au format réel
@@ -964,6 +964,6 @@ def test_release_v22_readme_and_evals_builder(tmp_path):
                                                    "par_categorie": {"capitales": {"n": 48, "acc": 0.1}}}))
     md = rt.build_evals_md(str(ev), os.path.join(here, "release", "v2.2", "evals_extra.md"))
     assert "Tu aimes le ndolé" in md and "12 plus 7 font 54. ✗" in md and "| Qui es-tu ? | Je suis MiniLLM. |" in md
-    assert "42/204" in md and "## 7. Comparaison directe" in md and "github" not in md.lower()
+    assert "42/204 = 20,6 %" in md and "Exact Match 6,8 %" in md and "## 7. Comparaison directe" in md and "github" not in md.lower()
     q = rt.knowledge_questions_md()
     assert q.count("\n|") > 200 and "Quelle est la capitale du Soudan ?" in q

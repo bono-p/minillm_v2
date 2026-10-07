@@ -1,5 +1,10 @@
 # Changelog — MiniLLM v2 (refonte après audit)
 
+## v2.2 publiée — mise à jour de la fiche
+
+* Le dépôt Hugging Face `miniLLM_v2.2-49M-50200it_3.29Btoks_1.0ep_20261005` est publié. Réussite par catégorie du test de connaissances (C) : langue 35,6 %, culture 36,4 %, géographie 27,8 %, capitales absentes de l'entraînement 12,5 % (6/48), Cameroun 6,2 % (1/16), nombres 0 % : la langue fournit 16 des 42 bonnes réponses. README et `resultats_automatiques.md` mis à jour (virgule décimale, « … » sur les réponses tronquées) ; `colab/MAJ_fiche_modele.ipynb` renvoie uniquement ces fichiers, sans les poids.
+* Ajout d'un fichier `LICENSE` (MIT) à la racine du dépôt de code.
+
 ## Publication v2.2 : README, fichiers d'évaluation, test de connaissances publié
 
 * `release/v2.2/README.md` : fiche du modèle v2.2 ; tous les chiffres viennent de la fiche, des logs et des évaluations (exemples de réponses extraits mot pour mot de `openqa.txt`). Mesuré pour la transparence : 28 des 337 questions ouvertes (dont 10 des 11 questions de capitales) et 22 des 36 connaissances de base figurent dans les données synthétiques du SFT ; 39 des 45 questions de langue du test de connaissances reprennent un type de question enseigné.
