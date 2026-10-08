@@ -93,43 +93,77 @@ def ok_magpie(instr: str, resp: str, max_answer_chars: int = 350, max_question_c
     return True
 
 
+def _first_qa_any(row: dict) -> Optional[Tuple[str, str]]:
+    """Essaie d'extraire une paire (question, réponse) d'une ligne, qu'elle soit au format plat
+    (instruction/input/output ou équivalent) OU au format ShareGPT (conversations=[{from/role, value/content}, ...]).
+    Filet de sécurité pour les sources dont le nom de champ réel diffère de ce qu'on attendait."""
+    instr = _first(row, "instruction", "question", "prompt", "query")
+    inp = _first(row, "input", "context")
+    ans = _first(row, "output", "response", "answer", "completion")
+    if instr and ans:
+        return (f"{instr}\n\n{inp}" if inp else instr), ans
+    turns = row.get("conversations") or row.get("conversation") or row.get("messages") or []
+    role_map = {"human": "user", "user": "user", "gpt": "assistant", "assistant": "assistant", "system": "system"}
+    q = a = None
+    for t in turns:
+        if not isinstance(t, dict):
+            continue
+        role = role_map.get(str(t.get("from") or t.get("role") or "").lower())
+        content = (t.get("value") or t.get("content") or "").strip()
+        if not content:
+            continue
+        if role == "user" and q is None:
+            q = content
+        elif role == "assistant" and q is not None and a is None:
+            a = content
+            break
+    return (q, a) if q and a else None
+
+
 def load_magpie_fr(max_examples: int, seed: int = 0) -> List[Conv]:
     """
     bofenghuang/magpie-fr : questions + réponses en français générées par de gros modèles (Magpie), notées et
     filtrées par leurs auteurs. On cible le sous-ensemble le plus petit et le plus tractable (50k lignes) plutôt
     que les fichiers bruts (plusieurs Go par modèle). Champs non garantis d'une révision à l'autre du dataset :
-    plusieurs noms candidats sont essayés ; en cas d'échec, la source est simplement ignorée (voir _safe()).
+    plusieurs noms candidats sont essayés (dont le format ShareGPT en repli), en cas d'échec la source est
+    simplement ignorée (voir _safe()).
     """
     from datasets import load_dataset
     ds = load_dataset("bofenghuang/magpie-fr", data_files="magpie_inst_resp_mininstscore28_subset50k_responded_processed.jsonl",
                       split="train", streaming=True)
     ds = ds.shuffle(seed=seed, buffer_size=10_000)
     out: List[Conv] = []
+    first_row_keys = None
     for row in ds:
-        instr = _first(row, "instruction", "question", "prompt", "conversation")
-        resp = _first(row, "response", "output", "answer", "responses")
-        if instr and resp and ok_magpie(instr, resp):
-            out.append(_conv(instr, resp))
+        if first_row_keys is None:
+            first_row_keys = list(row.keys())
+        qa = _first_qa_any(row)
+        if qa and ok_magpie(*qa):
+            out.append(_conv(*qa))
             if len(out) >= max_examples:
                 break
+    if not out and first_row_keys:
+        print(f"  ⚠️  magpie_fr : 0 exemple retenu — colonnes réelles du dataset : {first_row_keys}")
     return out
 
 
 def load_alpaca_style(dataset_name: str, max_examples: int, max_answer_chars: int = 350,
                       max_question_chars: int = 300, seed: int = 0) -> List[Conv]:
-    """Charge n'importe quel dataset au format Alpaca (instruction/input/output ou équivalent)."""
+    """Charge n'importe quel dataset au format Alpaca (instruction/input/output ou équivalent), avec repli
+    ShareGPT (conversations=[...]) si le dataset s'avère en fait dans ce format (voir _first_qa_any)."""
     from datasets import load_dataset
     ds = load_dataset(dataset_name, split="train")
     idx = np.random.default_rng(seed).permutation(len(ds))
     out: List[Conv] = []
+    first_row_keys = None
     for i in idx:
         row = ds[int(i)]
-        instr = _first(row, "instruction", "question", "prompt", "query")
-        inp = _first(row, "input", "context")
-        ans = _first(row, "output", "response", "answer", "completion")
-        if not instr or not ans:
+        if first_row_keys is None:
+            first_row_keys = list(row.keys())
+        qa = _first_qa_any(row)
+        if not qa:
             continue
-        q = instr if not inp else f"{instr}\n\n{inp}"
+        q, ans = qa
         if len(q) > max_question_chars or not (3 <= len(ans) <= max_answer_chars):
             continue                                    # un tout petit modèle apprend mieux sur des réponses COURTES
         if "###" in ans or "http" in ans or contradicts_persona(q, ans):
@@ -137,6 +171,8 @@ def load_alpaca_style(dataset_name: str, max_examples: int, max_answer_chars: in
         out.append(_conv(q, ans))
         if len(out) >= max_examples:
             break
+    if not out and first_row_keys:
+        print(f"  ⚠️  {dataset_name} : 0 exemple retenu — colonnes réelles du dataset : {first_row_keys}")
     return out
 
 

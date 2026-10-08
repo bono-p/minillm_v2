@@ -106,9 +106,12 @@ def iter_local_txt(patterns: List[str], chunk_chars: int = 4000) -> Iterator[str
 
 def load_fquad(max_examples: int, seed: int = 0) -> List[Conv]:
     """FQuAD (Illuin) : QA extractive sur Wikipédia FR, même format que PIAF déjà utilisé en SFT.
-    Peut être 'gated' selon la révision HF -> passe --hf_token si besoin (voir _hf_login)."""
+    ⚠️ DÉSACTIVÉ par défaut (FQUAD_CONV=0 dans le notebook) : "illuin/fquad" n'existe plus sur le Hub, et le
+    vrai dataset ("fquad") est un script de chargement qui exige un téléchargement manuel depuis
+    https://fquad.illuin.tech/ (licence CC BY-NC-SA, pas de redistribution auto) — pas automatisable proprement.
+    PIAF (déjà utilisé) couvre le même type de QA extractive sans cette contrainte."""
     from datasets import load_dataset
-    ds = load_dataset("illuin/fquad", split="train")
+    ds = load_dataset("fquad", split="train", trust_remote_code=True)
     idx = np.random.default_rng(seed).permutation(len(ds))
     out: List[Conv] = []
     for i in idx:
