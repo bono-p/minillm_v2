@@ -33,8 +33,8 @@ from text_cleaning import clean_web_text, clean_wikipedia_text, refilter_doc
 # Réutilise les loaders SFT existants (mêmes sources, même nettoyage/filtre de personnalité) pour que le
 # pré-entraînement et le SFT voient le même format de données, mix conversationnel inclus : Alpaca, OASST-FR,
 # Magpie-FR, PIAF, Alpaca-GPT4-FR, Evol-Instruct-FR (single-turn) + ShareGPT-FR (vrais dialogues multi-tours).
-from sft_data import (_conv, _safe, load_alpaca_style, load_french_alpaca, load_jsonl, load_magpie_fr,
-                      load_oasst_fr, load_piaf, load_sharegpt_fr)
+from sft_data import (_conv, _piaf_window, _safe, load_alpaca_style, load_french_alpaca, load_jsonl, load_magpie_fr,
+                      load_oasst_fr, load_piaf, load_sharegpt_fr, load_sharegpt_style)
 from synthetic_qa import build_synthetic_qa
 
 Conv = Dict  # {"messages": [{"role": "user"/"assistant", "content": str}, ...]}
@@ -104,12 +104,39 @@ def iter_local_txt(patterns: List[str], chunk_chars: int = 4000) -> Iterator[str
                 yield "\n\n".join(buf)
 
 
+def load_fquad(max_examples: int, seed: int = 0) -> List[Conv]:
+    """FQuAD (Illuin) : QA extractive sur Wikipédia FR, même format que PIAF déjà utilisé en SFT.
+    Peut être 'gated' selon la révision HF -> passe --hf_token si besoin (voir _hf_login)."""
+    from datasets import load_dataset
+    ds = load_dataset("illuin/fquad", split="train")
+    idx = np.random.default_rng(seed).permutation(len(ds))
+    out: List[Conv] = []
+    for i in idx:
+        row = ds[int(i)]
+        texts, starts = row["answers"]["text"], row["answers"]["answer_start"]
+        if not texts:
+            continue
+        ans = texts[0].strip()
+        if not ans:
+            continue
+        ctx = _piaf_window(row["context"], int(starts[0]), len(texts[0]))
+        if ans not in ctx:
+            continue
+        q = f"Réponds à la question à partir du texte.\n\nTexte : {ctx}\n\nQuestion : {row['question'].strip()}"
+        a = ans if ans[-1] in ".!?" else ans + "."
+        out.append(_conv(q, a))
+        if len(out) >= max_examples:
+            break
+    return out
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  Étapes
 # ══════════════════════════════════════════════════════════════════════════════
 def build_corpus(out: str, wiki_docs: int = 250_000, web_docs: int = 0, local_txt: Optional[List[str]] = None,
                  alpaca_conv: int = 0, oasst_conv: int = 0, magpie_conv: int = 0, piaf_conv: int = 0,
                  alpaca_gpt4_conv: int = 0, evol_conv: int = 0, sharegpt_conv: int = 0,
+                 french_instruct_conv: int = 0, vonewman_conv: int = 0, fquad_conv: int = 0,
                  synthetic_repeat_pretrain: int = 0, persona: Optional[str] = None, persona_repeat: int = 50,
                  conv_repeat: int = 4, seed: int = 42, hf_token: Optional[str] = None) -> str:
     """Les sources 'text' (wiki/web/local) sont écrites une seule fois, dédupliquées.
@@ -150,8 +177,16 @@ def build_corpus(out: str, wiki_docs: int = 250_000, web_docs: int = 0, local_tx
         if evol_conv > 0:
             yield "evol_conv", _safe("evol_conv", load_alpaca_style, "FreedomIntelligence/evol-instruct-french",
                                      evol_conv, max_answer_chars=450, seed=cseed)
-        if sharegpt_conv > 0:          # vrais dialogues multi-tours (seule source multi-tours du mix)
+        if sharegpt_conv > 0:          # dialogues multi-tours
             yield "sharegpt_conv", _safe("sharegpt_conv", load_sharegpt_fr, sharegpt_conv, seed=cseed)
+        if french_instruct_conv > 0:   # dialogues multi-tours (miroir ShareGPT de angeluriot/french_instruct, MIT)
+            yield "french_instruct_conv", _safe("french_instruct_conv", load_sharegpt_style,
+                                               "MaziyarPanahi/french_instruct_sharegpt", french_instruct_conv, seed=cseed)
+        if vonewman_conv > 0:          # dialogues multi-tours (Apache-2.0, ~109k conversations dispo)
+            yield "vonewman_conv", _safe("vonewman_conv", load_sharegpt_style,
+                                        "vonewman/french-instruction-dataset", vonewman_conv, seed=cseed)
+        if fquad_conv > 0:
+            yield "fquad_conv", _safe("fquad_conv", load_fquad, fquad_conv, seed=cseed)
         if synthetic_repeat_pretrain > 0:
             yield "synthetic", [c for r in range(synthetic_repeat_pretrain) for c in build_synthetic_qa(seed=cseed + r)]
         if persona:
@@ -327,7 +362,10 @@ def main():
     p.add_argument("--piaf_conv", type=int, default=0, help="nb d'exemples PIAF réutilisés en pré-entraînement")
     p.add_argument("--alpaca_gpt4_conv", type=int, default=0, help="nb d'exemples Alpaca-GPT4-FR réutilisés")
     p.add_argument("--evol_conv", type=int, default=0, help="nb d'exemples Evol-Instruct-FR réutilisés")
-    p.add_argument("--sharegpt_conv", type=int, default=0, help="nb de dialogues ShareGPT-FR (seule source multi-tours, ~5.6k dispo max)")
+    p.add_argument("--sharegpt_conv", type=int, default=0, help="nb de dialogues ShareGPT-FR (~5.6k dispo max)")
+    p.add_argument("--french_instruct_conv", type=int, default=0, help="nb de dialogues MaziyarPanahi/french_instruct_sharegpt (multi-tours, ~85M tok dispo)")
+    p.add_argument("--vonewman_conv", type=int, default=0, help="nb de dialogues vonewman/french-instruction-dataset (multi-tours, ~109k dispo)")
+    p.add_argument("--fquad_conv", type=int, default=0, help="nb d'exemples FQuAD (QA extractive, peut nécessiter --hf_token)")
     p.add_argument("--synthetic_pretrain", type=int, default=0, help="nb de passes de synthetic_qa.py dans le pré-entraînement")
     p.add_argument("--persona", default=None, help="chemin vers personnalite.jsonl (optionnel, côté pré-entraînement)")
     p.add_argument("--persona_repeat_pretrain", type=int, default=50)
@@ -346,7 +384,9 @@ def main():
         build_corpus(a.out, a.wiki_docs, a.web_docs, a.local_txt,
                     alpaca_conv=a.alpaca_conv, oasst_conv=a.oasst_conv, magpie_conv=a.magpie_conv,
                     piaf_conv=a.piaf_conv, alpaca_gpt4_conv=a.alpaca_gpt4_conv, evol_conv=a.evol_conv,
-                    sharegpt_conv=a.sharegpt_conv, synthetic_repeat_pretrain=a.synthetic_pretrain,
+                    sharegpt_conv=a.sharegpt_conv, french_instruct_conv=a.french_instruct_conv,
+                    vonewman_conv=a.vonewman_conv, fquad_conv=a.fquad_conv,
+                    synthetic_repeat_pretrain=a.synthetic_pretrain,
                     persona=a.persona, persona_repeat=a.persona_repeat_pretrain, conv_repeat=a.conv_repeat,
                     seed=a.seed, hf_token=a.hf_token)
     if a.stage in ("tokenizer", "all"):

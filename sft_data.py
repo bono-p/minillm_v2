@@ -202,21 +202,24 @@ def load_oasst_fr(max_examples: int, max_answer_chars: int = 500, seed: int = 0)
     return out[:max_examples]
 
 
-def load_sharegpt_fr(max_examples: int, max_turns: int = 4, max_msg_chars: int = 400, seed: int = 0) -> List[Conv]:
-    """Conversations multi-tours (format ShareGPT : conversations=[{from, value}, ...]) -> diversité de FORME
-    que les sources question->réponse à un tour n'apportent pas (relances, contexte qui s'accumule)."""
+def load_sharegpt_style(dataset_name: str, max_examples: int, text_field: str = "conversations",
+                        max_turns: int = 4, max_msg_chars: int = 400, seed: int = 0,
+                        data_files: Optional[str] = None) -> List[Conv]:
+    """Charge n'importe quel dataset au format ShareGPT ({text_field}=[{from/role, value/content}, ...]) ->
+    diversité de FORME (relances, contexte qui s'accumule) que les sources question->réponse à un tour n'apportent pas."""
     from datasets import load_dataset
-    ds = load_dataset("FreedomIntelligence/sharegpt-french", split="train")
+    ds = load_dataset(dataset_name, data_files=data_files, split="train") if data_files else \
+        load_dataset(dataset_name, split="train")
     role_map = {"human": "user", "gpt": "assistant", "system": "system", "user": "user", "assistant": "assistant"}
     idx = np.random.default_rng(seed).permutation(len(ds))
     out: List[Conv] = []
     for i in idx:
         row = ds[int(i)]
-        turns = row.get("conversations") or row.get("conversation") or []
+        turns = row.get(text_field) or row.get("conversation") or row.get("messages") or []
         messages = []
         for t in turns[:max_turns]:
-            role = role_map.get(str(t.get("from", "")).lower())
-            content = (t.get("value") or "").strip()
+            role = role_map.get(str(t.get("from") or t.get("role") or "").lower())
+            content = (t.get("value") or t.get("content") or "").strip()
             if not role or not content or len(content) > max_msg_chars:
                 messages = []
                 break
@@ -231,6 +234,13 @@ def load_sharegpt_fr(max_examples: int, max_turns: int = 4, max_msg_chars: int =
         if len(out) >= max_examples:
             break
     return out
+
+
+def load_sharegpt_fr(max_examples: int, max_turns: int = 4, max_msg_chars: int = 400, seed: int = 0) -> List[Conv]:
+    """Conversations multi-tours (format ShareGPT : conversations=[{from, value}, ...]) -> diversité de FORME
+    que les sources question->réponse à un tour n'apportent pas (relances, contexte qui s'accumule)."""
+    return load_sharegpt_style("FreedomIntelligence/sharegpt-french", max_examples, "conversations",
+                               max_turns, max_msg_chars, seed)
 
 
 def load_jsonl(path: str) -> List[Conv]:
