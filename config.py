@@ -161,6 +161,9 @@ class TrainConfig:
     log_every: int = 25
     patience: int = 0                # early stopping (en nombre d'évals sans amélioration), 0 = off
     max_minutes: float = 0.0         # budget temps : sauvegarde propre puis arrêt (sessions Kaggle/Colab limitées), 0 = off
+    stop_at: int = 0                 # arrêt propre (éval + sauvegarde) à CETTE itération, sans toucher au planning de LR : sert à changer
+                                     # de données au début de la décroissance WSD (voir docs/V2_3_PLAN.md) ; 0 = off
+    n_heads: int = 0                 # 0 = celui du preset ; sinon remplace n_heads (et kv_heads) du preset : ablations de têtes d'attention
 
     # matériel
     device: str = "auto"

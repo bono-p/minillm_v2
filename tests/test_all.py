@@ -967,3 +967,137 @@ def test_release_v22_readme_and_evals_builder(tmp_path):
     assert "42/204 = 20,6 %" in md and "Exact Match 6,8 %" in md and "## 7. Comparaison directe" in md and "github" not in md.lower()
     q = rt.knowledge_questions_md()
     assert q.count("\n|") > 200 and "Quelle est la capitale du Soudan ?" in q
+
+
+# ── v2.3 : plan de mélange, filtres, écriture reprenable (sans torch ni réseau) ───────────────────────────────────────────────────
+def _toy_tokenizer(tmp_path):
+    from mini_tokenizer import MiniTokenizer, train_tokenizer
+    corpus = ["le chat dort dans la maison et la maison est grande", "bonjour comment vas-tu aujourd'hui", "les enfants jouent dehors"] * 40
+    path = str(tmp_path / "tok.json")
+    train_tokenizer(iter(corpus), vocab_size=400, save_path=path, min_frequency=1, show_progress=False)
+    return MiniTokenizer(path)
+
+
+def test_v23_plan_is_valid_balanced_and_license_safe():
+    import mixplan
+    plan = mixplan.DEFAULT_PLAN
+    assert mixplan.validate(plan, budget=5 * mixplan.B) == []
+    assert abs(mixplan.phase_total(plan, "stable") - 4.25 * mixplan.B) < 1e6 and abs(mixplan.phase_total(plan, "decay") - 0.75 * mixplan.B) < 1e6
+    sh = mixplan.category_shares(plan)
+    assert sh["web_wiki"] < 0.36 and sh["conversations"] > 0.08 and abs(sum(sh.values()) - 1) < 1e-9
+    assert all(s.license == "permissive" for s in plan) and mixplan.storage_bytes(plan) == 10 * mixplan.B
+    keys = [(s.hf_path, tuple(sorted(s.filters.items()))) for s in plan if s.kind == "hf_text"]
+    assert len(keys) == len(set(keys)), "deux sources sur le même flux liraient les mêmes documents"
+    sc = mixplan.scaled(plan, 2 * mixplan.B)
+    assert abs(sum(s.total for s in sc) - 2 * mixplan.B) < 100 and abs(mixplan.category_shares(sc)["livres"] - sh["livres"]) < 1e-6
+    import dataclasses
+    nc = dataclasses.replace(plan[1], license="nc")
+    assert any("licence" in p for p in mixplan.validate([nc]))
+
+
+def test_v23_filters_and_decontamination():
+    import mixdata
+    ocr = "Il était une fois un homme qui habi-\ntait dans une petite maison au bord de la mer.\n\n   12   \n\nLe vent soufflait et les vagues se brisaient sur les rochers de la côte."
+    c = mixdata.clean_ocr(ocr)
+    assert "habitait" in c and "12" not in c and "\n\n" in c
+    fr = ("Le chat est dans la maison et il dort sur le canapé avec les enfants qui jouent dans le jardin. "
+          "Demain nous irons au marché pour acheter des légumes, des fruits et du pain frais pour toute la famille. "
+          "La rivière traverse la ville avant de se jeter dans la mer, et les bateaux y passent chaque matin. "
+          "Elle a lu un livre passionnant sur l'histoire de son pays pendant que la pluie tombait sur les toits.")
+    assert mixdata.quality_ok(fr, "web") and not mixdata.quality_ok("short", "web")
+    assert not mixdata.quality_ok("The quick brown fox jumps over the lazy dog and runs away from the farmer. " * 8, "web")
+    assert not mixdata.quality_ok("asdkj qwe zxcvb poiuy lkjh " * 30, "livre")
+    assert mixdata.to_messages([{"from": "human", "value": "Salut"}, {"from": "gpt", "value": "Bonjour !"}])[1]["role"] == "assistant"
+    assert mixdata.to_messages([{"from": "human", "value": "Salut"}]) is None and mixdata.to_messages("x") is None
+    assert not mixdata.chat_ok([{"role": "user", "content": "Écris un poème sur la mer."},
+                                {"role": "assistant", "content": "Je suis désolé, je ne peux pas écrire de poème."}])
+    assert mixdata.chat_ok([{"role": "user", "content": "Quelle est la capitale du Cameroun ?"}, {"role": "assistant", "content": "Yaoundé est la capitale politique du Cameroun."}])
+    d = mixdata.Decontaminator(["Quelle est la capitale du Soudan ?"])
+    assert d.contaminated([{"role": "user", "content": "quelle est la capitale du Soudan?"}, {"role": "assistant", "content": "Khartoum"}])
+    assert not d.contaminated([{"role": "user", "content": "Quelle est la capitale du Mali ?"}])
+    qs = mixdata.eval_questions(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    assert len(qs) > 500 and any("capitale du Soudan" in q for q in qs)
+
+
+def test_v23_run_source_quotas_val_resume_and_epochs(tmp_path):
+    import mixdata
+    tok = _toy_tokenizer(tmp_path)
+    docs = [f"document numéro {i} : le chat dort dans la maison et les enfants jouent dehors, bonjour comment vas-tu aujourd'hui {i}" for i in range(300)]
+
+    def factory(skip, epoch):
+        return iter(docs[skip:])
+
+    def run(out, crash_after=None):
+        st = mixdata.State(str(out / "state.json"))
+        w = mixdata.MixWriter(str(out), tok, st, val_permille=50)
+        seen = {"n": 0}
+
+        def prep(d):
+            seen["n"] += 1
+            if crash_after and seen["n"] > crash_after:
+                raise KeyboardInterrupt
+            return d
+
+        mixdata.run_source(w, "src", {"stable": 4000, "decay": 1500}, factory, prep, max_epochs=3, checkpoint_every=700, log=lambda m: None)
+        w.close()
+        return st
+
+    a = tmp_path / "a"
+    st_a = run(a)
+    s = st_a.src("src")
+    assert s["tokens"]["stable"] >= 4000 and s["tokens"]["decay"] >= 1500 and s["tokens"]["stable"] < 4000 + 100 and s["val_tokens"] > 0 and s["epochs"] == 0
+    for ph in ("stable", "decay"):
+        assert os.path.getsize(a / ph / "train.bin") == 2 * s["tokens"][ph]
+    # interruption en plein milieu puis reprise : résultat identique, octet pour octet
+    b = tmp_path / "b"
+    try:
+        run(b, crash_after=60)
+    except KeyboardInterrupt:
+        pass
+    st_b = run(b)
+    for f in ("stable/train.bin", "decay/train.bin", "val_new.bin"):
+        assert open(a / f, "rb").read() == open(b / f, "rb").read(), f
+    assert st_b.src("src")["tokens"] == s["tokens"]
+    # source trop petite : répétée (époques) puis arrêt au maximum d'époques
+    small = docs[:5]
+    st2 = mixdata.State(str(tmp_path / "s2.json"))
+    w2 = mixdata.MixWriter(str(tmp_path / "c"), tok, st2, val_permille=0)
+    msgs = []
+    mixdata.run_source(w2, "petite", {"stable": 100_000}, lambda skip, ep: iter(small[skip:]), lambda d: d, max_epochs=2, log=msgs.append)
+    w2.close()
+    r = st2.src("petite")
+    assert r["epochs"] == 3 and r["repeated_tokens"] > 0 and any("répétitions" in m for m in msgs)
+    assert os.path.getsize(tmp_path / "c" / "stable" / "train.bin") == 2 * r["tokens"]["stable"]
+    # fichier corrompu (plus petit que l'état) : refus explicite
+    with open(a / "stable" / "train.bin", "r+b") as f:
+        f.truncate(10)
+    try:
+        mixdata.MixWriter(str(a), tok, mixdata.State(str(a / "state.json")))
+        raise AssertionError("aurait dû refuser")
+    except RuntimeError:
+        pass
+
+
+def test_v23_existing_bin_uses_disjoint_blocks(tmp_path):
+    import numpy as np
+    import mixdata
+    tok = _toy_tokenizer(tmp_path)
+    block = 100
+    src = np.arange(1000, dtype=np.uint16)                                   # 10 blocs : le contenu identifie chaque bloc
+    src.tofile(str(tmp_path / "train.bin"))
+    st = mixdata.State(str(tmp_path / "st.json"))
+    w = mixdata.MixWriter(str(tmp_path / "o"), tok, st, val_permille=0)
+    mixdata.run_existing_bin(w, "old", {"stable": 450, "decay": 200}, str(tmp_path / "train.bin"), block=block, seed=1)
+    w.close()
+    a = np.fromfile(tmp_path / "o" / "stable" / "train.bin", dtype=np.uint16)
+    b = np.fromfile(tmp_path / "o" / "decay" / "train.bin", dtype=np.uint16)
+    assert len(a) == 450 and len(b) == 200
+    assert not (set(a.tolist()) & set(b.tolist())), "la phase decay ne doit pas réutiliser les blocs de la phase stable"
+
+
+def test_v23_trainconfig_has_stop_at_and_heads_override():
+    import config
+    c = config.TrainConfig()
+    assert c.stop_at == 0 and c.n_heads == 0
+    t = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "train.py"), encoding="utf-8").read()
+    assert "stop_now" in t and "cfg.n_heads" in t

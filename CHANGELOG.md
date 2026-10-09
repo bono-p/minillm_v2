@@ -1,5 +1,13 @@
 # Changelog — MiniLLM v2 (refonte après audit)
 
+## Branche v2.3 — pré-entraînement 5 Md de tokens, sources variées, contexte 1024
+
+* `mixplan.py` : plan de mélange (données, pas du code) — web/wiki 33 %, livres et presse 30 %, web ouvert 12 %, conversations 9 %, science 8 %, administratif 7 % ; validation du plan (licences : sources non commerciales exclues par défaut, répétitions, budget).
+* `mixdata.py` + `prepare_mix.py` : moteur de construction reprenable (fichiers tronqués à la dernière position enregistrée : résultat identique après interruption, testé), filtres OCR / qualité / refus, décontamination des conversations vis-à-vis de nos jeux d'évaluation, réutilisation du corpus v2.2 déjà tokenisé, contrôle de l'espace disque. Commandes `plan`, `inspect`, `build`, `status`.
+* `train.py` / `config.py` : `--stop_at` (arrêt propre à une itération donnée, sans changer le planning de LR : bascule de données au début de la décroissance WSD) et `--n_heads` (essai de têtes d'attention).
+* `colab/Prepare_v23_data.ipynb`, `colab/Pretrain_v23.ipynb`, `docs/V2_3_PLAN.md`.
+* Non vérifié hors ligne : colonnes et organisation des fichiers de Common Corpus (commande `inspect`), vitesse de streaming.
+
 ## v2.2 publiée — mise à jour de la fiche
 
 * Le dépôt Hugging Face `miniLLM_v2.2-49M-50200it_3.29Btoks_1.0ep_20261005` est publié. Réussite par catégorie du test de connaissances (C) : langue 35,6 %, culture 36,4 %, géographie 27,8 %, capitales absentes de l'entraînement 12,5 % (6/48), Cameroun 6,2 % (1/16), nombres 0 % : la langue fournit 16 des 42 bonnes réponses. README et `resultats_automatiques.md` mis à jour (virgule décimale, « … » sur les réponses tronquées) ; `colab/MAJ_fiche_modele.ipynb` renvoie uniquement ces fichiers, sans les poids.

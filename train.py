@@ -169,7 +169,10 @@ def train(cfg: TrainConfig) -> dict:
         init_ckpt = load_checkpoint(cfg.init_from)
         model_cfg = ModelConfig.from_dict(init_ckpt["config"])
     else:
-        model_cfg = get_preset(cfg.model_size, vocab_size=data_vocab, max_seq_len=cfg.seq_len)
+        overrides = dict(vocab_size=data_vocab, max_seq_len=cfg.seq_len)
+        if cfg.n_heads > 0:
+            overrides.update(n_heads=cfg.n_heads, kv_heads=cfg.n_heads)
+        model_cfg = get_preset(cfg.model_size, **overrides)
     if cfg.dropout >= 0:
         model_cfg = dataclasses.replace(model_cfg, dropout=cfg.dropout)
     data_sha = (train_data.meta or {}).get("tokenizer_sha")
@@ -345,14 +348,20 @@ def train(cfg: TrainConfig) -> dict:
                     dist.all_reduce(flag, op=dist.ReduceOp.MAX)
                 time_up = bool(flag.item())
 
+            # ── arrêt planifié (ex. début de la décroissance WSD, pour changer de données) ──
+            stop_now = cfg.stop_at > 0 and it == cfg.stop_at and it < max_iters
+
             # ── éval / sauvegarde (éval AVANT sauvegarde : best_val à jour dans le ckpt) ──
-            if it % cfg.eval_every_at(it) == 0 or it == max_iters or time_up:
+            if it % cfg.eval_every_at(it) == 0 or it == max_iters or time_up or stop_now:
                 do_eval()
                 if cfg.patience > 0 and no_improve >= cfg.patience:
                     say(f"⏹  early stopping : {no_improve} évaluations sans amélioration.")
                     stopped_early = True
-            if it % cfg.save_every == 0 or it == max_iters or time_up or stopped_early:
+            if it % cfg.save_every == 0 or it == max_iters or time_up or stopped_early or stop_now:
                 do_save()
+            if stop_now:
+                say(f"⏸  arrêt planifié à it={it} (--stop_at) : checkpoint sauvegardé. Relance avec --data_dir <phase suivante> et sans --stop_at.")
+                break
             if time_up:
                 say(f"⏱  budget de {cfg.max_minutes} min atteint : checkpoint sauvegardé, relance la même commande pour continuer.")
                 break
