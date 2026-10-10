@@ -55,8 +55,12 @@ class Source:
 
 # ── plan par défaut : 5,00 milliards de tokens = 4,25 (stable) + 0,75 (decay) ─────────────────────────────────────────────────────
 DEFAULT_PLAN: List[Source] = [
-    Source("web_wiki_existant", "existing_bin", "web_wiki", stable=int(1.45 * B), decay=int(0.22 * B),
-           note="corpus v2.2 déjà tokenisé (Wikipédia FR + FineWeb-2 FR) : pas de retéléchargement ; la phase decay prend des blocs jamais utilisés en phase stable"),
+    Source("wikipedia_fr", "hf_text", "web_wiki", stable=int(0.80 * B), decay=int(0.15 * B), hf_path="wikimedia/wikipedia", hf_config="20231101.fr",
+           clean="wiki", est_available_tokens=int(1.0 * B), license="permissive",
+           note="Wikipédia FR (CC BY-SA), mêmes nettoyages que la v2.2 (phrases à trous, sections de fin) ; la phase decay en reprend la suite"),
+    Source("fineweb2_fr", "hf_text", "web_wiki", stable=int(0.65 * B), decay=int(0.07 * B), hf_path="HuggingFaceFW/fineweb-2", hf_config="fra_Latn",
+           clean="web", est_available_tokens=int(50 * B),
+           note="web français filtré (FineWeb-2, ODC-By), mêmes filtres anti-spam que la v2.2"),
     Source("livres_presse_fr", "hf_text", "livres", stable=int(1.40 * B), decay=int(0.10 * B), hf_path="PleIAs/common_corpus",
            filters={"collection": "OpenCulture", "language": "French"}, clean="livre", est_available_tokens=int(20 * B),
            note="livres et journaux du domaine public (OCR) : filtre qualité OCR ; style souvent ancien -> la phase decay (texte moderne) corrige. "

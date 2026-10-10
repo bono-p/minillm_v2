@@ -6,6 +6,7 @@
 * `mixdata.py` + `prepare_mix.py` : moteur de construction reprenable (fichiers tronqués à la dernière position enregistrée : résultat identique après interruption, testé), filtres OCR / qualité / refus, décontamination des conversations vis-à-vis de nos jeux d'évaluation, réutilisation du corpus v2.2 déjà tokenisé, contrôle de l'espace disque. Commandes `plan`, `inspect`, `build`, `status`.
 * `train.py` / `config.py` : `--stop_at` (arrêt propre à une itération donnée, sans changer le planning de LR : bascule de données au début de la décroissance WSD) et `--n_heads` (essai de têtes d'attention).
 * `colab/Prepare_v23_data.ipynb`, `colab/Pretrain_v23.ipynb`, `docs/V2_3_PLAN.md`.
+* Départ de zéro (Drive vidé) : Wikipédia FR (`wikimedia/wikipedia`, 20231101.fr) et FineWeb-2 (`fra_Latn`) en streaming avec les nettoyages de la v2.2 (`text_cleaning.py`) ; tokenizer récupéré sur le dépôt Hugging Face v2.2 ; corpus existant facultatif ; `val.bin` = documents de validation des nouvelles sources (non comparable à 3,0431).
 * Non vérifié hors ligne : colonnes et organisation des fichiers de Common Corpus (commande `inspect`), vitesse de streaming.
 
 ## v2.2 publiée — mise à jour de la fiche

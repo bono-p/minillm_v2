@@ -10,7 +10,7 @@ Branche `v2.3`. Objectif : mesurer ce que changent **des données plus variées 
 | sources | Wikipédia FR + web (FineWeb-2) | web/wiki **33 %**, livres et presse **30 %**, web ouvert (transcriptions, StackExchange) **12 %**, conversations **9 %**, science **8 %**, administratif **7 %** |
 | contexte | 512 | **1 024** |
 | architecture | 10 couches, d_model 512, 8 têtes | **identique** (têtes : essai séparé, voir §5) |
-| tokenizer | BPE 32 000 | **identique** (corpus v2.2 réutilisé, sans retokeniser ; les jetons `<|user|>`, `<|assistant|>`, `<|end|>` existent déjà) |
+| tokenizer | BPE 32 000 | **identique** (récupéré sur le dépôt Hugging Face v2.2 ; les jetons `<|user|>`, `<|assistant|>`, `<|end|>` existent déjà) |
 
 Une seule famille de variables à la fois : données + contexte. Changer aussi le nombre de têtes rendrait impossible de dire ce qui a aidé.
 
@@ -27,7 +27,7 @@ Pourquoi : les données de style « instruction » ne sont pas mélangées à to
 
 | source | licence | rôle | statut de la vérification |
 |---|---|---|---|
-| corpus v2.2 déjà tokenisé (Wikipédia FR, FineWeb-2 FR) | déjà utilisé | base, 1,67 Md | vérifié (c'est le tien) |
+| Wikipédia FR (`wikimedia/wikipedia`, 20231101.fr) et FineWeb-2 (`fra_Latn`), en streaming | CC BY-SA ; ODC-By | base, 1,67 Md | identifiants et nettoyages repris du pipeline v2.2 (le Drive ayant été vidé, on repart de zéro) |
 | Common Corpus (`PleIAs/common_corpus`) : OpenCulture (livres, presse), OpenWeb, OpenScience, OpenGovernment, filtre langue française | permissive (fiche Hugging Face) | livres, web ouvert, science, administratif | licence vérifiée ; **colonnes et organisation des fichiers non vérifiées** (cellule `inspect`) |
 | `french_instruct` (miroir `MaziyarPanahi/french_instruct_sharegpt`) | MIT (original `angeluriot/french_instruct`) ; ≈ 275 000 conversations, ≈ 85 M tokens | conversations multi-tours | fiche vérifiée ; une partie traduite via l'API ChatGPT : voir les conditions d'utilisation |
 | `vonewman/french-instruction-dataset` | Apache-2.0 ; 108 991 conversations | conversations | fiche vérifiée |
@@ -40,7 +40,7 @@ Pourquoi : les données de style « instruction » ne sont pas mélangées à to
 
 - **Décontamination** : les conversations dont un message utilisateur est exactement l'une de nos questions d'évaluation (337 questions ouvertes, 204 de connaissances, 36 de base, problèmes chiffrés, persona) sont écartées. Limite : correspondance exacte, pas de reformulation ; non appliquée aux livres et pages web.
 - **Qualité** : filtre OCR pour les livres (lettres, mots français courants, répétitions), recollage des mots coupés ; refus génériques, boucles et échos écartés des conversations (mêmes filtres que le SFT).
-- **Validation** : `val.bin` = la validation de la v2.2 (la `val_loss` reste comparable à 3,0431) ; les documents des nouvelles sources sont dans `val_new.bin` (non évalués pendant l'entraînement).
+- **Validation** : 3 pour mille des documents de chaque source sont écartés de l'entraînement et servent de `val.bin`. Cette `val_loss` n'est **pas comparable** à celle des versions précédentes (3,0431) : l'ancienne validation n'existe plus et la distribution est différente.
 - **Reprise** : les fichiers sont tronqués à la dernière position enregistrée ; une interruption donne le même résultat qu'un run sans coupure (testé).
 - **Espace disque** : refus de démarrer si le Drive est trop plein.
 
@@ -51,7 +51,8 @@ Pourquoi : les données de style « instruction » ne sont pas mélangées à to
 
 ## 6. Estimations (à vérifier avec tes propres mesures)
 
-- **Disque** : 5 Md × 2 octets = **10 Go** (+ le corpus v2.2 de 6,5 Go déjà présent). Tient dans 30 Go.
+- **Disque** : 5 Md × 2 octets = **10 Go**, rien d'autre sur le Drive. Tient dans 30 Go.
+- **Durée de construction** : non mesurée (streaming + nettoyage Python + tokenisation sur CPU Colab) ; compte plusieurs heures, probablement plusieurs sessions. La commande est reprenable.
 - **Temps** : `jours = tokens / (tokens_par_seconde × 86 400)`. À 8 000 / 12 000 / 20 000 tokens/s : 7,2 / 4,8 / 2,9 jours de GPU continu pour 5 Md (14 / 9,6 / 5,8 pour 10 Md). Le débit réel du pré-entraînement n'est pas dans ce dépôt : lis `tok/s` dans tes logs.
 - **Gain attendu sur la perte** (ordre de grandeur, ajustement de Chinchilla à taille fixe, pas transférable exactement à notre tokenizer ni à ce mélange) : environ −0,10 de `val_loss` à 5 Md, −0,24 à 10 Md. Dans notre expérience, −0,16 de `val_loss` (v2.1 → v2.2) n'a pas suffi à améliorer significativement les connaissances : le gain mesuré est venu du SFT. Un modèle de 49M a aussi une capacité de connaissance très limitée (de l'ordre de 2 bits par paramètre selon la littérature) : plus de tokens aident surtout la langue ; les faits dépendront davantage de la taille du modèle.
 - **Budget extensible** : avec WSD, on peut faire la phase de décroissance à n'importe quel moment depuis le plateau. Stable jusqu'à 5 Md, décroissance courte ; ou continuer le plateau jusqu'à 10 Md si le disque (100 Go demain) et le temps le permettent.

@@ -48,6 +48,12 @@ def make_prepare(src: mixplan.Source, deco: Decontaminator):
             t = row.get(src.text_field) if isinstance(row, dict) else None
             if not isinstance(t, str):
                 return None
+            if src.clean == "wiki":                                  # mêmes nettoyages que le pipeline v2.2 (text_cleaning.py)
+                from text_cleaning import clean_wikipedia_text
+                return clean_wikipedia_text(t)
+            if src.clean == "web":
+                from text_cleaning import clean_web_text
+                return clean_web_text(t)
             t = clean_ocr(t, kind) if src.clean else t
             return t if quality_ok(t, kind) else None
         return prep
@@ -99,6 +105,17 @@ def cmd_inspect(a) -> None:
             print(f"❌ {type(e).__name__}: {e}")
 
 
+def ensure_tokenizer_file(path: str, repo: str) -> None:
+    """Si tokenizer.json est absent, le télécharge depuis le dépôt Hugging Face public (même tokenizer BPE 32 000 que la v2.2)."""
+    if os.path.exists(path):
+        return
+    from huggingface_hub import hf_hub_download
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    got = hf_hub_download(repo, "tokenizer.json")
+    shutil.copy(got, path)
+    print(f"tokenizer.json téléchargé depuis {repo}")
+
+
 def _free_bytes(path: str) -> Optional[int]:
     try:
         return shutil.disk_usage(path).free
@@ -125,6 +142,9 @@ def cmd_build(a) -> None:
     if free is not None and free + already < need:
         sys.exit(f"Espace disque insuffisant : {need / 1e9:.1f} Go nécessaires, {(free + already) / 1e9:.1f} Go disponibles dans {a.out}. "
                  f"Réduis --budget (ex. {int(5e9 * (free + already) / need * 0.9):,}) ou libère de la place.")
+    ensure_tokenizer_file(a.tokenizer, a.tokenizer_repo)
+    if any(s.kind == "existing_bin" for s in plan) and not (a.existing and os.path.exists(os.path.join(a.existing, "train.bin"))):
+        sys.exit("Le plan contient une source existing_bin mais --existing ne pointe pas vers un dossier avec train.bin.")
     shutil.copy(a.tokenizer, os.path.join(a.out, "tokenizer.json"))
     tok = MiniTokenizer(os.path.join(a.out, "tokenizer.json"))
     deco = Decontaminator(eval_questions("."))
@@ -146,18 +166,24 @@ def cmd_build(a) -> None:
 
 
 def finalize(out: str, existing: str, tok, plan: List[mixplan.Source], st: State) -> None:
-    import numpy as np
-    old_val = os.path.join(existing, "val.bin")
-    meta_old = json.load(open(os.path.join(existing, "meta.json"))) if os.path.exists(os.path.join(existing, "meta.json")) else {}
+    """Écrit meta.json de chaque phase. val.bin : celui d'un corpus existant s'il y en a un (val_loss comparable à celle de ce corpus),
+    sinon les documents de validation des nouvelles sources (val_new.bin)."""
+    old_val = os.path.join(existing, "val.bin") if existing else ""
+    meta_old = json.load(open(os.path.join(existing, "meta.json"))) if existing and os.path.exists(os.path.join(existing, "meta.json")) else {}
+    val_src = old_val if old_val and os.path.exists(old_val) else os.path.join(out, "val_new.bin")
+    if not os.path.exists(val_src) or os.path.getsize(val_src) == 0:
+        print("⚠️  aucun document de validation : augmente --val_permille")
     for ph in ("stable", "decay"):
         d = os.path.join(out, ph)
-        if os.path.exists(old_val):
-            shutil.copy(old_val, os.path.join(d, "val.bin"))             # même validation que la v2.2 : val_loss comparable à 3,0431
+        if os.path.exists(val_src):
+            shutil.copy(val_src, os.path.join(d, "val.bin"))
         n_train = os.path.getsize(os.path.join(d, "train.bin")) // 2
         n_val = os.path.getsize(os.path.join(d, "val.bin")) // 2 if os.path.exists(os.path.join(d, "val.bin")) else 0
         meta = {"dtype": "uint16", "vocab_size": tok.vocab_size, "padded_vocab_size": tok.padded_vocab_size, "eot_id": tok.eot_id,
                 "n_train_tokens": n_train, "n_val_tokens": n_val, "tokenizer_sha": getattr(tok, "sha", None), "phase": ph,
-                "val_note": "val.bin = validation de la v2.2 (comparable à 3,0431) ; val_new.bin (dossier parent) = documents des nouvelles sources",
+                "val_note": ("val.bin = validation du corpus existant" if val_src == old_val else
+                             "val.bin = documents de validation des nouvelles sources (3 pour mille des documents de chaque source, écartés de l'entraînement) : "
+                             "val_loss NON comparable à celle des versions précédentes"),
                 "corpus_ref": {k: meta_old.get(k) for k in ("n_train_docs", "n_val_docs")}}
         json.dump(meta, open(os.path.join(d, "meta.json"), "w"), indent=1)
     tot = sum(s["tokens"]["stable"] + s["tokens"]["decay"] for s in st.d["sources"].values()) or 1
@@ -186,7 +212,9 @@ def main() -> None:
     q = sub.add_parser("inspect"); q.add_argument("--n", type=int, default=2); q.set_defaults(f=cmd_inspect)
     q = sub.add_parser("build")
     q.add_argument("--out", default="data/v23"); q.add_argument("--tokenizer", default="data/tokenizer.json")
-    q.add_argument("--existing", default="data/pretrain", help="dossier du corpus v2.2 déjà tokenisé (train.bin, val.bin, meta.json)")
+    q.add_argument("--existing", default="", help="(facultatif) dossier d'un corpus déjà tokenisé (train.bin, val.bin, meta.json), si le plan contient une source existing_bin")
+    q.add_argument("--tokenizer_repo", default="bonopassale/miniLLM_v2.2-49M-50200it_3.29Btoks_1.0ep_20261005",
+                   help="dépôt Hugging Face d'où récupérer tokenizer.json s'il est absent (même tokenizer que la v2.2)")
     q.add_argument("--budget", type=float, default=0, help="total de tokens (ex. 3e9) : mêmes proportions que le plan par défaut")
     q.add_argument("--only", default="", help="noms de sources séparés par des virgules (ex. essai rapide)")
     q.add_argument("--val_permille", type=int, default=3); q.add_argument("--allow_nc", action="store_true"); q.set_defaults(f=cmd_build)

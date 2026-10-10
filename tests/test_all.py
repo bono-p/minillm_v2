@@ -1101,3 +1101,32 @@ def test_v23_trainconfig_has_stop_at_and_heads_override():
     assert c.stop_at == 0 and c.n_heads == 0
     t = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "train.py"), encoding="utf-8").read()
     assert "stop_now" in t and "cfg.n_heads" in t
+
+
+def test_v23_finalize_without_existing_corpus_and_cleaners(tmp_path):
+    import json
+    import mixdata
+    import mixplan
+    import prepare_mix
+    tok = _toy_tokenizer(tmp_path)
+    docs = [f"document numéro {i} : le chat dort dans la maison et les enfants jouent dehors, bonjour comment vas-tu aujourd'hui {i}" for i in range(200)]
+    st = mixdata.State(str(tmp_path / "o" / "state.json"))
+    os.makedirs(tmp_path / "o", exist_ok=True)
+    w = mixdata.MixWriter(str(tmp_path / "o"), tok, st, val_permille=60)
+    mixdata.run_source(w, "src", {"stable": 1500, "decay": 600}, lambda skip, ep: iter(docs[skip:]), lambda d: d, max_epochs=2, log=lambda m: None)
+    w.close()
+    plan = [mixplan.Source("src", "hf_text", "web_wiki", stable=1500, decay=600, hf_path="x")]
+    prepare_mix.finalize(str(tmp_path / "o"), "", tok, plan, st)               # pas de corpus existant : val.bin = val_new.bin
+    for ph in ("stable", "decay"):
+        m = json.load(open(tmp_path / "o" / ph / "meta.json"))
+        assert m["dtype"] == "uint16" and m["n_train_tokens"] > 0 and m["n_val_tokens"] > 0 and "NON comparable" in m["val_note"]
+        assert open(tmp_path / "o" / ph / "val.bin", "rb").read() == open(tmp_path / "o" / "val_new.bin", "rb").read()
+    assert json.load(open(tmp_path / "o" / "mix_report.json"))["parts_par_categorie"]["web_wiki"] == 1.0
+    # nettoyages repris de la v2.2 : une page de menu commerciale est rejetée, un article propre est gardé
+    wiki = prepare_mix.make_prepare(mixplan.Source("w", "hf_text", "web_wiki", hf_path="x", clean="wiki"), mixdata.Decontaminator([]))
+    web = prepare_mix.make_prepare(mixplan.Source("f", "hf_text", "web_wiki", hf_path="x", clean="web"), mixdata.Decontaminator([]))
+    para = "Le village est situé dans la vallée, au pied de la montagne, et ses habitants vivent surtout de l'élevage et de l'agriculture. "
+    assert wiki({"text": (para + "\n") * 5}) is not None and wiki({"text": "trop court"}) is None
+    assert web({"text": "Cliquez ici pour la livraison gratuite, code promo, newsletter. " * 12}) is None
+    varied = "\n".join(f"Phrase numéro {i} : le village est situé dans la vallée, au pied de la montagne, et ses habitants vivent de l'élevage {i}." for i in range(8))
+    assert web({"text": varied}) is not None and web({"text": (para + "\n") * 6}) is None   # lignes répétées = menu ou spam : rejeté
