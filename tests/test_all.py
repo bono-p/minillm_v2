@@ -1130,3 +1130,11 @@ def test_v23_finalize_without_existing_corpus_and_cleaners(tmp_path):
     assert web({"text": "Cliquez ici pour la livraison gratuite, code promo, newsletter. " * 12}) is None
     varied = "\n".join(f"Phrase numéro {i} : le village est situé dans la vallée, au pied de la montagne, et ses habitants vivent de l'élevage {i}." for i in range(8))
     assert web({"text": varied}) is not None and web({"text": (para + "\n") * 6}) is None   # lignes répétées = menu ou spam : rejeté
+
+
+def test_v23_group_paths_summarises_repo_layout():
+    import prepare_mix
+    files = [("OpenCulture/fr/part1.parquet", 10), ("OpenCulture/fr/part2.parquet", 30), ("OpenCulture/en/a.parquet", 5), ("README.md", 1)]
+    g = prepare_mix.group_paths(files, depth=2)
+    assert g["OpenCulture/fr"] == (2, 40) and g["OpenCulture/en"] == (1, 5) and g["(racine)"] == (1, 1)
+    assert prepare_mix.group_paths(files, depth=1)["OpenCulture"] == (3, 45)

@@ -3,6 +3,7 @@ prepare_mix.py — construit les données de pré-entraînement v2.3 (deux dossi
 
   python prepare_mix.py plan                                  # affiche le plan, ses proportions, l'espace disque, les avertissements
   python prepare_mix.py inspect                               # (réseau) colonnes et premier exemple de chaque source : À LANCER AVANT build
+  python prepare_mix.py tree --repo PleIAs/common_corpus      # (réseau, rapide) organisation d'un gros dépôt : collections, langues, fichiers
   python prepare_mix.py build --out data/v23 --tokenizer data/tokenizer.json --existing data/pretrain
   python prepare_mix.py status --out data/v23
 
@@ -85,6 +86,30 @@ def cmd_plan(a) -> None:
         print("⚠️ ", p)
 
 
+def group_paths(files, depth: int = 2) -> Dict[str, tuple]:
+    """[(chemin, taille)] -> {préfixe: (nombre de fichiers, octets)} ; sert à repérer comment un gros dépôt est organisé (collection, langue…)."""
+    out: Dict[str, list] = {}
+    for path, size in files:
+        key = "/".join(path.split("/")[:depth]) if "/" in path else "(racine)"
+        e = out.setdefault(key, [0, 0])
+        e[0] += 1
+        e[1] += size or 0
+    return {k: (v[0], v[1]) for k, v in sorted(out.items())}
+
+
+def cmd_tree(a) -> None:
+    """Liste les fichiers d'un dépôt Hugging Face (API, rapide : ne résout pas tout le jeu de données comme load_dataset)."""
+    from huggingface_hub import HfApi
+    items = list(HfApi().list_repo_tree(a.repo, path_in_repo=a.path or None, repo_type="dataset", recursive=True))
+    files = [(i.path, getattr(i, "size", 0) or 0) for i in items if hasattr(i, "size") and i.__class__.__name__ == "RepoFile"]
+    if a.grep:
+        files = [(p, sz) for p, sz in files if a.grep.lower() in p.lower()]
+    print(f"{a.repo} {a.path or ''} : {len(files):,} fichiers, {sum(sz for _, sz in files) / 1e9:.1f} Go" + (f" (filtre « {a.grep} »)" if a.grep else ""))
+    for k, (n, b) in group_paths(files, a.depth).items():
+        print(f"  {k:<60} {n:>7,} fichiers {b / 1e9:9.2f} Go")
+    print("exemples :", *[p for p, _ in files[:6]], sep="\n  ")
+
+
 def cmd_inspect(a) -> None:
     from datasets import load_dataset
     seen = set()
@@ -92,6 +117,10 @@ def cmd_inspect(a) -> None:
         if not src.hf_path or (src.hf_path, src.hf_data_files) in seen:
             continue
         seen.add((src.hf_path, src.hf_data_files))
+        if src.hf_path == "PleIAs/common_corpus" and not src.hf_data_files and not a.all:
+            print("=" * 80, f"\n{src.hf_path} : ignoré (dépôt énorme : load_dataset met très longtemps à résoudre ses fichiers).",
+                  "\n  Utilise d'abord :  python prepare_mix.py tree --repo PleIAs/common_corpus  pour voir son organisation (collections, langues).")
+            continue
         print("=" * 80, f"\n{src.hf_path}  (utilisée par : {', '.join(s.name for s in mixplan.DEFAULT_PLAN if s.hf_path == src.hf_path)})")
         try:
             kw = {"streaming": True, "split": "train"}
@@ -209,7 +238,9 @@ def main() -> None:
     p = argparse.ArgumentParser(description="MiniLLM v2.3 — préparation du mélange de données")
     sub = p.add_subparsers(dest="cmd", required=True)
     q = sub.add_parser("plan"); q.add_argument("--budget", type=float, default=0); q.add_argument("--allow_nc", action="store_true"); q.set_defaults(f=cmd_plan)
-    q = sub.add_parser("inspect"); q.add_argument("--n", type=int, default=2); q.set_defaults(f=cmd_inspect)
+    q = sub.add_parser("inspect"); q.add_argument("--n", type=int, default=2); q.add_argument("--all", action="store_true"); q.set_defaults(f=cmd_inspect)
+    q = sub.add_parser("tree"); q.add_argument("--repo", default="PleIAs/common_corpus"); q.add_argument("--path", default="")
+    q.add_argument("--depth", type=int, default=2); q.add_argument("--grep", default=""); q.set_defaults(f=cmd_tree)
     q = sub.add_parser("build")
     q.add_argument("--out", default="data/v23"); q.add_argument("--tokenizer", default="data/tokenizer.json")
     q.add_argument("--existing", default="", help="(facultatif) dossier d'un corpus déjà tokenisé (train.bin, val.bin, meta.json), si le plan contient une source existing_bin")
