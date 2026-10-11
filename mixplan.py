@@ -10,12 +10,18 @@ Idée : planning WSD (warmup-stable-decay, déjà implémenté) + DEUX jeux de d
 Tout est une DONNÉE (dataclass) : on change les proportions en éditant DEFAULT_PLAN, sans toucher au code.
 
 ⚠️ Ce qui est VÉRIFIÉ et ce qui ne l'est pas :
-  * vérifié (fiches Hugging Face) : licences et ordres de grandeur de Common Corpus (licences permissives), french_instruct (MIT,
-    ≈ 274 000 conversations, ≈ 85 M tokens), french-instruction-dataset de vonewman (Apache-2.0, 108 991 conversations),
-    Lucie-Training-Dataset et Claire (CC BY-NC-SA : exclus par défaut, car le modèle est publié sous MIT) ;
-  * NON vérifié hors ligne : noms exacts des colonnes et organisation des fichiers de Common Corpus, taille réelle de chaque
-    sous-ensemble français. `prepare_mix.py inspect` les affiche ; `est_available_tokens` n'est qu'une ESTIMATION qui sert à
-    avertir quand une source devrait être répétée plus de ~3 fois.
+  * vérifié (fiches Hugging Face, puis confirmé en lisant des lignes réelles le 2026-10-10) : licences et ordres de grandeur de
+    Common Corpus (licences permissives) ; champ `collection` = sous-collection précise (ex. « French Open Data », « Wikidata »),
+    champ `open_type` = l'un des 6 grands groupes (« Open Culture », « Open Government », « Open Science », « Open Web »,
+    « Open Source », « Semantic data ») — c'est CE champ qu'on filtre, pas `collection` ; champ `language` = « French » pour les
+    lignes en français (confirmé sur un exemple « Open Government ») ; french_instruct (MIT, ≈ 274 000 conversations, ≈ 85 M
+    tokens, colonne `conversations` au format ShareGPT), french-instruction-dataset de vonewman (Apache-2.0, 108 991
+    conversations, même format), PIAF (colonnes `context`/`question`/`answers.text`) ;
+  * encore NON vérifié hors ligne : que « Open Culture », « Open Science » et « Open Web » s'écrivent exactement ainsi (seuls
+    « Open Government » et « Semantic data » ont été vus sur un exemple réel) — si un filtre ne donne aucune ligne, `prepare_mix.py
+    build` s'arrête avant de consommer du quota et affiche les valeurs d'`open_type` réellement rencontrées ; taille réelle de
+    chaque sous-ensemble français. `est_available_tokens` n'est qu'une ESTIMATION qui sert à avertir quand une source devrait
+    être répétée plus de ~3 fois.
 """
 from __future__ import annotations
 
@@ -62,17 +68,17 @@ DEFAULT_PLAN: List[Source] = [
            clean="web", est_available_tokens=int(50 * B),
            note="web français filtré (FineWeb-2, ODC-By), mêmes filtres anti-spam que la v2.2"),
     Source("livres_presse_fr", "hf_text", "livres", stable=int(1.40 * B), decay=int(0.10 * B), hf_path="PleIAs/common_corpus",
-           filters={"collection": "OpenCulture", "language": "French"}, clean="livre", est_available_tokens=int(20 * B),
+           filters={"open_type": "Open Culture", "language": "French"}, clean="livre", est_available_tokens=int(20 * B),
            note="livres et journaux du domaine public (OCR) : filtre qualité OCR ; style souvent ancien -> la phase decay (texte moderne) corrige. "
                 "Une seule source (et non deux) : deux sources sur le même flux liraient les mêmes documents"),
     Source("openweb_fr", "hf_text", "openweb", stable=int(0.55 * B), decay=int(0.07 * B), hf_path="PleIAs/common_corpus",
-           filters={"collection": "OpenWeb", "language": "French"}, est_available_tokens=int(5 * B),
+           filters={"open_type": "Open Web", "language": "French"}, est_available_tokens=int(5 * B),
            note="transcriptions YouTube-Commons et StackExchange en français (langue parlée, questions-réponses) ; la phase decay lit la suite du flux"),
     Source("science_fr", "hf_text", "science", stable=int(0.35 * B), decay=int(0.05 * B), hf_path="PleIAs/common_corpus",
-           filters={"collection": "OpenScience", "language": "French"}, est_available_tokens=int(3 * B),
+           filters={"open_type": "Open Science", "language": "French"}, est_available_tokens=int(3 * B),
            note="thèses et articles scientifiques en français"),
     Source("admin_fr", "hf_text", "admin", stable=int(0.35 * B), hf_path="PleIAs/common_corpus",
-           filters={"collection": "OpenGovernment", "language": "French"}, est_available_tokens=int(3 * B),
+           filters={"open_type": "Open Government", "language": "French"}, est_available_tokens=int(3 * B),
            note="textes administratifs et juridiques : registre formel, à ne pas laisser dominer"),
     Source("french_instruct", "hf_chat", "conversations", stable=int(0.10 * B), decay=int(0.20 * B),
            hf_path="MaziyarPanahi/french_instruct_sharegpt", text_field="conversations", est_available_tokens=int(85 * M), max_epochs=4.0,

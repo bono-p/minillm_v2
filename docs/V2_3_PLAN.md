@@ -28,7 +28,7 @@ Pourquoi : les données de style « instruction » ne sont pas mélangées à to
 | source | licence | rôle | statut de la vérification |
 |---|---|---|---|
 | Wikipédia FR (`wikimedia/wikipedia`, 20231101.fr) et FineWeb-2 (`fra_Latn`), en streaming | CC BY-SA ; ODC-By | base, 1,67 Md | identifiants et nettoyages repris du pipeline v2.2 (le Drive ayant été vidé, on repart de zéro) |
-| Common Corpus (`PleIAs/common_corpus`) : OpenCulture (livres, presse), OpenWeb, OpenScience, OpenGovernment, filtre langue française | permissive (fiche Hugging Face) | livres, web ouvert, science, administratif | licence vérifiée ; **colonnes et organisation des fichiers non vérifiées** (cellule `inspect`) |
+| Common Corpus (`PleIAs/common_corpus`), filtré sur `open_type` (« Open Culture », « Open Web », « Open Science », « Open Government ») et `language` = « French » | permissive (fiche Hugging Face) | livres, web ouvert, science, administratif | licence vérifiée ; `open_type` et `language` confirmés sur un exemple réel (10 octobre 2026, `open_type="Open Government"`, `language="French"`) ; « Open Culture », « Open Science » et « Open Web » restent des noms déduits de la documentation, pas vus directement — `prepare_mix.py build` sonde chaque filtre avant de consommer le moindre quota et s'arrête en listant les valeurs réelles s'il ne trouve rien |
 | `french_instruct` (miroir `MaziyarPanahi/french_instruct_sharegpt`) | MIT (original `angeluriot/french_instruct`) ; ≈ 275 000 conversations, ≈ 85 M tokens | conversations multi-tours | fiche vérifiée ; une partie traduite via l'API ChatGPT : voir les conditions d'utilisation |
 | `vonewman/french-instruction-dataset` | Apache-2.0 ; 108 991 conversations | conversations | fiche vérifiée |
 | PIAF (`etalab-ia/piaf`) | déjà utilisé au SFT | questions-réponses | identifiant repris du SFT |
@@ -67,4 +67,13 @@ Pourquoi : les données de style « instruction » ne sont pas mélangées à to
 
 ## 8. Ce qui reste à valider
 
-Colonnes et filtres de Common Corpus (étape `inspect`), vitesse de lecture en streaming, tailles réelles des sous-ensembles français, qualité réelle des livres après filtrage (échantillon à lire), et le pourcentage de documents rejetés par source (`mix_report.json`).
+« Open Culture », « Open Science » et « Open Web » comme valeurs exactes du champ `open_type` (sondées automatiquement au lancement de `build`, avant toute consommation de quota) ; vitesse de lecture en streaming ; tailles réelles des sous-ensembles français ; qualité réelle des livres après filtrage (échantillon à lire) ; pourcentage de documents rejetés par source (`mix_report.json`).
+
+## 9. Commandes utiles en cas de filtre qui ne matche rien
+
+```
+python prepare_mix.py build --out data/v23 --tokenizer data/tokenizer.json --budget 5e9   # sonde les filtres puis s'arrête si un seul est vide
+python prepare_mix.py tree --repo PleIAs/common_corpus --depth 2                            # organisation des fichiers (collections)
+```
+
+Si la sonde échoue, corrige `filters={"open_type": ...}` dans `mixplan.py` avec la valeur réelle qu'elle affiche, puis relance `build` : la commande est reprenable, rien de ce qui a déjà été écrit n'est perdu.

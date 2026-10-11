@@ -1,5 +1,11 @@
 # Changelog — MiniLLM v2 (refonte après audit)
 
+## Correction des filtres Common Corpus (lecture de lignes réelles)
+
+* Les premières lignes réelles de `PleIAs/common_corpus` montrent que le champ à filtrer est `open_type` (« Open Government », « Semantic data » vus directement), pas `collection` (qui est une sous-collection plus fine, ex. « French Open Data », « Wikidata »). `mixplan.py` est corrigé en conséquence.
+* **Nouveau filet de sécurité** : `prepare_mix.py build` sonde désormais chaque filtre (400 premières lignes) avant de consommer le moindre quota, et s'arrête avec les valeurs réellement rencontrées si un filtre ne matche rien — au lieu de tourner pour rien ou de construire silencieusement un mélange avec une source vide. `--skip_probe` pour la désactiver.
+* `prepare_mix.py tree` (ajout précédent) reste utile pour explorer l'organisation des fichiers d'un gros dépôt.
+
 ## Branche v2.3 — pré-entraînement 5 Md de tokens, sources variées, contexte 1024
 
 * `mixplan.py` : plan de mélange (données, pas du code) — web/wiki 33 %, livres et presse 30 %, web ouvert 12 %, conversations 9 %, science 8 %, administratif 7 % ; validation du plan (licences : sources non commerciales exclues par défaut, répétitions, budget).

@@ -152,6 +152,30 @@ def _free_bytes(path: str) -> Optional[int]:
         return None
 
 
+def probe_filters(src: mixplan.Source, n_scan: int = 400) -> Optional[str]:
+    """Avant de consommer le moindre quota : vérifie que les filtres du plan matchent au moins une ligne parmi les `n_scan`
+    premières. Si aucune ne matche, renvoie un message d'erreur listant les valeurs RÉELLEMENT vues pour chaque clé filtrée
+    (au lieu de tourner pour rien, ou pire, de construire un mélange avec une source vide sans que personne ne le remarque)."""
+    if not src.filters or src.kind != "hf_text":
+        return None
+    from datasets import load_dataset
+    kw = {"streaming": True, "split": "train"}
+    if src.hf_data_files:
+        kw["data_files"] = src.hf_data_files
+    ds = load_dataset(src.hf_path, src.hf_config or None, **kw)
+    seen: Dict[str, set] = {k: set() for k in src.filters}
+    for i, row in enumerate(ds):
+        if i >= n_scan:
+            break
+        for k in src.filters:
+            if k in row:
+                seen[k].add(row[k])
+        if all(str(row.get(k)) == v for k, v in src.filters.items()):
+            return None                                             # au moins une ligne matche : tout va bien
+    details = " ; ".join(f"{k} attendu « {v} », valeurs vues : {sorted(seen.get(k, []))[:8]}" for k, v in src.filters.items())
+    return f"{src.name} : aucune des {n_scan} premières lignes ne correspond au filtre ({details})"
+
+
 def cmd_build(a) -> None:
     from mini_tokenizer import MiniTokenizer
     plan = mixplan.scaled(mixplan.DEFAULT_PLAN, int(a.budget)) if a.budget else list(mixplan.DEFAULT_PLAN)
@@ -163,6 +187,14 @@ def cmd_build(a) -> None:
         print("⚠️ ", p)
     if any("licence" in p for p in issues):
         sys.exit("Licence non compatible : corrige le plan (ou --allow_nc pour une variante de recherche NON publiée).")
+    if not a.skip_probe:
+        print("\nVérification des filtres avant de commencer (évite de découvrir une source vide après des heures) :")
+        probe_errors = [e for e in (probe_filters(s) for s in plan) if e]
+        for e in probe_errors:
+            print("❌ ", e)
+        if probe_errors:
+            sys.exit("Corrige mixplan.py (ou relance avec --skip_probe si tu es sûr que c'est bon), puis relance.")
+        print("✓ filtres vérifiés\n")
     os.makedirs(a.out, exist_ok=True)
     need = mixplan.storage_bytes(plan) + 200_000_000
     free = _free_bytes(a.out)
@@ -248,7 +280,9 @@ def main() -> None:
                    help="dépôt Hugging Face d'où récupérer tokenizer.json s'il est absent (même tokenizer que la v2.2)")
     q.add_argument("--budget", type=float, default=0, help="total de tokens (ex. 3e9) : mêmes proportions que le plan par défaut")
     q.add_argument("--only", default="", help="noms de sources séparés par des virgules (ex. essai rapide)")
-    q.add_argument("--val_permille", type=int, default=3); q.add_argument("--allow_nc", action="store_true"); q.set_defaults(f=cmd_build)
+    q.add_argument("--val_permille", type=int, default=3); q.add_argument("--allow_nc", action="store_true")
+    q.add_argument("--skip_probe", action="store_true", help="ne pas vérifier les filtres avant de commencer (déconseillé)")
+    q.set_defaults(f=cmd_build)
     q = sub.add_parser("status"); q.add_argument("--out", default="data/v23"); q.set_defaults(f=cmd_status)
     a = p.parse_args()
     a.f(a)

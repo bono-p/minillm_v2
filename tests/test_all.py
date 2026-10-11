@@ -1138,3 +1138,23 @@ def test_v23_group_paths_summarises_repo_layout():
     g = prepare_mix.group_paths(files, depth=2)
     assert g["OpenCulture/fr"] == (2, 40) and g["OpenCulture/en"] == (1, 5) and g["(racine)"] == (1, 1)
     assert prepare_mix.group_paths(files, depth=1)["OpenCulture"] == (3, 45)
+
+
+def test_v23_probe_filters_passes_or_lists_real_values_seen(monkeypatch):
+    import types
+    import mixplan
+    import prepare_mix
+
+    def fake_load_dataset(path, config=None, **kw):
+        rows = [{"open_type": "Semantic data", "language": "Multilingual"}, {"open_type": "Open Government", "language": "French"},
+                {"open_type": "Open Culture", "language": "English"}]
+        return iter(rows)
+
+    fake_datasets = types.SimpleNamespace(load_dataset=fake_load_dataset)
+    monkeypatch.setitem(sys.modules, "datasets", fake_datasets)
+    ok_src = mixplan.Source("x", "hf_text", "admin", stable=1, hf_path="PleIAs/common_corpus", filters={"open_type": "Open Government", "language": "French"})
+    assert prepare_mix.probe_filters(ok_src) is None
+    bad_src = mixplan.Source("y", "hf_text", "livres", stable=1, hf_path="PleIAs/common_corpus", filters={"open_type": "Open Science", "language": "French"})
+    err = prepare_mix.probe_filters(bad_src, n_scan=10)
+    assert err and "Open Government" in err and "Semantic data" in err and "y :" in err
+    assert prepare_mix.probe_filters(mixplan.Source("z", "hf_text", "web_wiki", stable=1, hf_path="x")) is None   # pas de filtre -> rien à sonder
