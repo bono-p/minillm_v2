@@ -1,5 +1,12 @@
 # Changelog — MiniLLM v2 (refonte après audit)
 
+## Rééquilibrage du plan après la première construction réelle (11/10/2026)
+
+* **Bug corrigé** : `prepare_mix.py` appelait `_piaf_window(context, ans_texte, 1200)` au lieu de `_piaf_window(context, ans_start, ans_len, width)` -> 100 % des lignes PIAF étaient rejetées (0 token obtenu). Corrigé, testé.
+* **Mesuré en conditions réelles** : le français sous les `open_type` Open Culture / Open Web / Open Science / Open Government de Common Corpus est beaucoup plus rare que les ~20 Md estimés (quelques millions à ~90 M tokens seulement). Les 4 sources correspondantes sont plafonnées à ce qui a été réellement obtenu (un nouveau `build` les saute sans rescanner) ; le budget libéré part vers `fineweb2_fr` (2,94 Md) et `wikipedia_fr` (1,20 Md), qui n'ont montré aucune limite de volume.
+* Les deux sources de conversations gardent leurs quotas d'origine ; leur plafond de répétitions est monté à 6 et 7 (elles étaient en-dessous de leur cible, pas à cause d'un manque de volume mais du plafond de répétitions).
+* Nouvelles parts : web/wiki **89 %**, conversations **9 %**, livres **1,8 %**, science/admin/web ouvert/qa **< 1 % chacun**. Un `build` relancé reprend la construction interrompue et complète l'écart vers fineweb2_fr/wikipedia_fr.
+
 ## Correction des filtres Common Corpus (lecture de lignes réelles)
 
 * Les premières lignes réelles de `PleIAs/common_corpus` montrent que le champ à filtrer est `open_type` (« Open Government », « Semantic data » vus directement), pas `collection` (qui est une sous-collection plus fine, ex. « French Open Data », « Wikidata »). `mixplan.py` est corrigé en conséquence.

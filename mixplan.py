@@ -61,33 +61,37 @@ class Source:
 
 # ── plan par défaut : 5,00 milliards de tokens = 4,25 (stable) + 0,75 (decay) ─────────────────────────────────────────────────────
 DEFAULT_PLAN: List[Source] = [
-    Source("wikipedia_fr", "hf_text", "web_wiki", stable=int(0.80 * B), decay=int(0.15 * B), hf_path="wikimedia/wikipedia", hf_config="20231101.fr",
-           clean="wiki", est_available_tokens=int(1.0 * B), license="permissive",
-           note="Wikipédia FR (CC BY-SA), mêmes nettoyages que la v2.2 (phrases à trous, sections de fin) ; la phase decay en reprend la suite"),
-    Source("fineweb2_fr", "hf_text", "web_wiki", stable=int(0.65 * B), decay=int(0.07 * B), hf_path="HuggingFaceFW/fineweb-2", hf_config="fra_Latn",
+    Source("wikipedia_fr", "hf_text", "web_wiki", stable=int(1.00 * B), decay=int(0.20 * B), hf_path="wikimedia/wikipedia", hf_config="20231101.fr",
+           clean="wiki", est_available_tokens=int(1.3 * B), license="permissive",
+           note="Wikipédia FR (CC BY-SA), mêmes nettoyages que la v2.2 ; relevé le 11/10/2026 : 0,95 Md obtenus sans aucune répétition -> augmenté"),
+    Source("fineweb2_fr", "hf_text", "web_wiki", stable=int(2.94 * B), decay=int(0.30 * B), hf_path="HuggingFaceFW/fineweb-2", hf_config="fra_Latn",
            clean="web", est_available_tokens=int(50 * B),
-           note="web français filtré (FineWeb-2, ODC-By), mêmes filtres anti-spam que la v2.2"),
-    Source("livres_presse_fr", "hf_text", "livres", stable=int(1.40 * B), decay=int(0.10 * B), hf_path="PleIAs/common_corpus",
-           filters={"open_type": "Open Culture", "language": "French"}, clean="livre", est_available_tokens=int(20 * B),
-           note="livres et journaux du domaine public (OCR) : filtre qualité OCR ; style souvent ancien -> la phase decay (texte moderne) corrige. "
-                "Une seule source (et non deux) : deux sources sur le même flux liraient les mêmes documents"),
-    Source("openweb_fr", "hf_text", "openweb", stable=int(0.55 * B), decay=int(0.07 * B), hf_path="PleIAs/common_corpus",
-           filters={"open_type": "Open Web", "language": "French"}, est_available_tokens=int(5 * B),
-           note="transcriptions YouTube-Commons et StackExchange en français (langue parlée, questions-réponses) ; la phase decay lit la suite du flux"),
-    Source("science_fr", "hf_text", "science", stable=int(0.35 * B), decay=int(0.05 * B), hf_path="PleIAs/common_corpus",
-           filters={"open_type": "Open Science", "language": "French"}, est_available_tokens=int(3 * B),
-           note="thèses et articles scientifiques en français"),
-    Source("admin_fr", "hf_text", "admin", stable=int(0.35 * B), hf_path="PleIAs/common_corpus",
-           filters={"open_type": "Open Government", "language": "French"}, est_available_tokens=int(3 * B),
-           note="textes administratifs et juridiques : registre formel, à ne pas laisser dominer"),
+           note="web français filtré (FineWeb-2, ODC-By) ; reçoit l'essentiel du budget libéré par Common Corpus (source quasi inépuisable, 0 répétition relevée)"),
+    # Les 4 sources Common Corpus ci-dessous sont PLAFONNÉES à ce qui a été réellement obtenu le 11/10/2026 (en butant sur
+    # max_epochs) : le français représenté sous ces `open_type` est beaucoup plus rare dans ce dépôt que les ~20 Md estimés au
+    # départ (quelques millions à quelques dizaines de millions de tokens seulement). Quota = acquis -> un nouveau `build` les
+    # saute sans rescanner. Le manque a été reporté sur fineweb2_fr, qui n'a pas cette limite.
+    Source("livres_presse_fr", "hf_text", "livres", stable=74_060_000, decay=18_515_000, hf_path="PleIAs/common_corpus",
+           filters={"open_type": "Open Culture", "language": "French"}, clean="livre", est_available_tokens=93_000_000,
+           note="livres et journaux du domaine public (OCR) en français : source petite dans Common Corpus (~93 M tokens), plafonnée à l'acquis"),
+    Source("openweb_fr", "hf_text", "openweb", stable=793_000, decay=198_000, hf_path="PleIAs/common_corpus",
+           filters={"open_type": "Open Web", "language": "French"}, est_available_tokens=1_000_000,
+           note="quasiment aucun contenu en français sous cet `open_type` dans Common Corpus (~1 M tokens) : gardé pour mémoire, part négligeable"),
+    Source("science_fr", "hf_text", "science", stable=7_901_000, decay=1_975_000, hf_path="PleIAs/common_corpus",
+           filters={"open_type": "Open Science", "language": "French"}, est_available_tokens=9_900_000,
+           note="thèses et articles scientifiques en français : source petite (~10 M tokens), plafonnée à l'acquis"),
+    Source("admin_fr", "hf_text", "admin", stable=8_718_000, hf_path="PleIAs/common_corpus",
+           filters={"open_type": "Open Government", "language": "French"}, est_available_tokens=8_800_000,
+           note="textes administratifs et juridiques en français : source petite (~9 M tokens), plafonnée à l'acquis"),
     Source("french_instruct", "hf_chat", "conversations", stable=int(0.10 * B), decay=int(0.20 * B),
-           hf_path="MaziyarPanahi/french_instruct_sharegpt", text_field="conversations", est_available_tokens=int(85 * M), max_epochs=4.0,
+           hf_path="MaziyarPanahi/french_instruct_sharegpt", text_field="conversations", est_available_tokens=int(85 * M), max_epochs=6.0,
            note="miroir ShareGPT de angeluriot/french_instruct (MIT), ≈ 85 M tokens, multi-tours ; une partie traduite via l'API ChatGPT (voir ses conditions d'utilisation)"),
     Source("french_instruction_vonewman", "hf_chat", "conversations", stable=int(0.05 * B), decay=int(0.10 * B),
-           hf_path="vonewman/french-instruction-dataset", text_field="conversations", est_available_tokens=int(45 * M), max_epochs=4.0,
+           hf_path="vonewman/french-instruction-dataset", text_field="conversations", est_available_tokens=int(45 * M), max_epochs=7.0,
            note="Apache-2.0, 108 991 conversations (≈ 45 M tokens : estimation d'après la taille du fichier)"),
-    Source("piaf_qa", "hf_qa", "qa", decay=int(0.01 * B), hf_path="etalab-ia/piaf", max_epochs=6.0, est_available_tokens=int(3 * M),
-           note="questions-réponses sur Wikipédia (même source que le SFT) ; très petit, répété jusqu'à 6 fois"),
+    Source("piaf_qa", "hf_qa", "qa", decay=2_000_000, hf_path="etalab-ia/piaf", max_epochs=6.0, est_available_tokens=700_000,
+           note="questions-réponses sur Wikipédia (même source que le SFT) ; très petit (~700 k tokens/époque), répété jusqu'à 6 fois. "
+                "Corrige un bug du 11/10/2026 : prepare_mix.py appelait _piaf_window() avec le mauvais signature -> 100% des lignes rejetées"),
 ]
 
 # Sources interdites par défaut (licence non commerciale) : listées pour mémoire, jamais dans le plan par défaut.

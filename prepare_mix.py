@@ -64,13 +64,19 @@ def make_prepare(src: mixplan.Source, deco: Decontaminator):
             return m if m and chat_ok(m) and not deco.contaminated(m) else None
         return prep
     if src.kind == "hf_qa":
-        from sft_data import _piaf_window
+        from sft_data import _piaf_window                        # _piaf_window(context, ans_start, ans_len, width) : INDICES, pas le texte
 
         def prep(row):
             try:
-                ans = row["answers"]["text"][0]
-                window = _piaf_window(row["context"], ans, 1200)
-                m = [{"role": "user", "content": f"Contexte : {window}\n\nQuestion : {row['question']}"}, {"role": "assistant", "content": ans}]
+                texts, starts = row["answers"]["text"], row["answers"]["answer_start"]
+                ans = texts[0].strip()
+                if not ans:
+                    return None
+                window = _piaf_window(row["context"], int(starts[0]), len(texts[0]))
+                if ans not in window:
+                    return None
+                m = [{"role": "user", "content": f"Contexte : {window}\n\nQuestion : {row['question'].strip()}"},
+                     {"role": "assistant", "content": ans if ans[-1] in ".!?" else ans + "."}]
             except Exception:                                   # noqa: BLE001
                 return None
             return m if not deco.contaminated(m) else None
