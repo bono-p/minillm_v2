@@ -5,6 +5,8 @@ prepare_mix.py — construit les données de pré-entraînement v2.3 (deux dossi
   python prepare_mix.py inspect                               # (réseau) colonnes et premier exemple de chaque source : À LANCER AVANT build
   python prepare_mix.py tree --repo PleIAs/common_corpus      # (réseau, rapide) organisation d'un gros dépôt : collections, langues, fichiers
   python prepare_mix.py build --out data/v23 --tokenizer data/tokenizer.json --existing data/pretrain
+  python prepare_mix.py build --local /content/v23_local --out data/v23 --tokenizer data/tokenizer.json   # écrit en local, pousse vers Drive à chaque source
+  python prepare_mix.py sync --local /content/v23_local --out data/v23                                     # relance juste la synchronisation (la « petite cellule »)
   python prepare_mix.py status --out data/v23
   python prepare_mix.py verify --out data/v23                 # (nouvelle session) confirme que Drive a bien tout synchronisé
 
@@ -19,7 +21,7 @@ import json
 import os
 import shutil
 import sys
-from typing import Dict, Iterator, List, Optional
+from typing import Callable, Dict, Iterator, List, Optional, Tuple
 
 import mixplan
 from mixdata import (Decontaminator, MixWriter, State, chat_ok, clean_ocr, eval_questions, quality_ok, run_existing_bin, run_source,
@@ -183,6 +185,54 @@ def probe_filters(src: mixplan.Source, n_scan: int = 400) -> Optional[str]:
     return f"{src.name} : aucune des {n_scan} premières lignes ne correspond au filtre ({details})"
 
 
+def sync_file(local_path: str, remote_path: str) -> Tuple[int, int]:
+    """Copie vers `remote_path` uniquement les octets de `local_path` qui n'y sont pas encore (reprise par la taille),
+    puis fsync. Jamais de retour en arrière : si `remote_path` est déjà plus gros, on ne touche à rien (sécurité)."""
+    if not os.path.exists(local_path):
+        return 0, os.path.getsize(remote_path) if os.path.exists(remote_path) else 0
+    local_size = os.path.getsize(local_path)
+    os.makedirs(os.path.dirname(os.path.abspath(remote_path)), exist_ok=True)
+    remote_size = os.path.getsize(remote_path) if os.path.exists(remote_path) else 0
+    if remote_size < local_size:
+        with open(local_path, "rb") as fin, open(remote_path, "ab") as fout:
+            fin.seek(remote_size)
+            shutil.copyfileobj(fin, fout, length=64 * 1024 * 1024)
+            fout.flush()
+            os.fsync(fout.fileno())
+    return local_size, os.path.getsize(remote_path)
+
+
+def sync_to_drive(local_dir: str, remote_dir: str, log: Callable[[str], None] = print) -> bool:
+    """Pousse `local_dir` (écriture rapide, sans aléas de synchronisation) vers `remote_dir` (ex. le Drive), fichier par
+    fichier, en ne recopiant que ce qui manque, puis VÉRIFIE la taille obtenue avant de continuer. C'est la « petite
+    cellule » qui joue le rôle de vérificateur : un appel = une confirmation immédiate, au lieu de devoir attendre et
+    espérer qu'une synchronisation en tâche de fond se termine."""
+    big = ["stable/train.bin", "decay/train.bin", "val_new.bin"]
+    small = ["state.json", "tokenizer.json", "mix_report.json", "stable/val.bin", "decay/val.bin", "stable/meta.json", "decay/meta.json"]
+    ok = True
+    for rel in big:
+        lp, rp = os.path.join(local_dir, rel), os.path.join(remote_dir, rel)
+        if not os.path.exists(lp):
+            continue
+        l, r = sync_file(lp, rp)
+        same = l == r
+        ok = ok and same
+        log(f"  {'✓' if same else '❌'} {rel:<20} local {l:>14,} o -> drive {r:>14,} o")
+    for rel in small:                                               # petits fichiers (état, méta) : toujours réécrits en entier
+        lp, rp = os.path.join(local_dir, rel), os.path.join(remote_dir, rel)
+        if os.path.exists(lp):
+            os.makedirs(os.path.dirname(os.path.abspath(rp)), exist_ok=True)
+            shutil.copy(lp, rp)
+    return ok
+
+
+def cmd_sync(a) -> None:
+    print(f"Synchronisation {a.local} -> {a.out} :")
+    ok = sync_to_drive(a.local, a.out)
+    print("✓ Drive à jour." if ok else "❌ un fichier n'a pas pu être entièrement recopié (relance la commande).")
+    sys.exit(0 if ok else 1)
+
+
 def cmd_build(a) -> None:
     from mini_tokenizer import MiniTokenizer
     plan = mixplan.scaled(mixplan.DEFAULT_PLAN, int(a.budget)) if a.budget else list(mixplan.DEFAULT_PLAN)
@@ -202,22 +252,23 @@ def cmd_build(a) -> None:
         if probe_errors:
             sys.exit("Corrige mixplan.py (ou relance avec --skip_probe si tu es sûr que c'est bon), puis relance.")
         print("✓ filtres vérifiés\n")
-    os.makedirs(a.out, exist_ok=True)
+    work = a.local or a.out                                         # --local : écrit vite en local, puis pousse vers --out (Drive) à chaque source
+    os.makedirs(work, exist_ok=True)
     need = mixplan.storage_bytes(plan) + 200_000_000
-    free = _free_bytes(a.out)
-    st = State(os.path.join(a.out, "state.json"))
-    already = sum(os.path.getsize(os.path.join(a.out, ph, "train.bin")) for ph in ("stable", "decay") if os.path.exists(os.path.join(a.out, ph, "train.bin")))
+    free = _free_bytes(work)
+    st = State(os.path.join(work, "state.json"))
+    already = sum(os.path.getsize(os.path.join(work, ph, "train.bin")) for ph in ("stable", "decay") if os.path.exists(os.path.join(work, ph, "train.bin")))
     if free is not None and free + already < need:
-        sys.exit(f"Espace disque insuffisant : {need / 1e9:.1f} Go nécessaires, {(free + already) / 1e9:.1f} Go disponibles dans {a.out}. "
+        sys.exit(f"Espace disque insuffisant : {need / 1e9:.1f} Go nécessaires, {(free + already) / 1e9:.1f} Go disponibles dans {work}. "
                  f"Réduis --budget (ex. {int(5e9 * (free + already) / need * 0.9):,}) ou libère de la place.")
     ensure_tokenizer_file(a.tokenizer, a.tokenizer_repo)
     if any(s.kind == "existing_bin" for s in plan) and not (a.existing and os.path.exists(os.path.join(a.existing, "train.bin"))):
         sys.exit("Le plan contient une source existing_bin mais --existing ne pointe pas vers un dossier avec train.bin.")
-    shutil.copy(a.tokenizer, os.path.join(a.out, "tokenizer.json"))
-    tok = MiniTokenizer(os.path.join(a.out, "tokenizer.json"))
+    shutil.copy(a.tokenizer, os.path.join(work, "tokenizer.json"))
+    tok = MiniTokenizer(os.path.join(work, "tokenizer.json"))
     deco = Decontaminator(eval_questions("."))
     print(f"Décontamination : {len(deco)} questions d'évaluation à écarter des conversations.")
-    writer = MixWriter(a.out, tok, st, val_permille=a.val_permille)
+    writer = MixWriter(work, tok, st, val_permille=a.val_permille)
     try:
         for src in plan:
             quotas = {"stable": src.stable, "decay": src.decay}
@@ -228,9 +279,18 @@ def cmd_build(a) -> None:
                 run_source(writer, src.name, quotas, lambda skip, ep, s=src: hf_stream(s, skip, ep), make_prepare(src, deco), src.max_epochs)
             s = st.src(src.name)
             print(f"   fait : stable {s['tokens']['stable']:,} · decay {s['tokens']['decay']:,} · répétitions {s['epochs']} · rejetés {s['dropped']}")
+            if a.local and a.local != a.out:
+                writer.checkpoint()
+                print(f"   -> synchronisation vers {a.out} :")
+                sync_to_drive(work, a.out, log=lambda m: print("  " + m))
     finally:
         writer.close()
-    finalize(a.out, a.existing, tok, plan, st)
+    finalize(work, a.existing, tok, plan, st)
+    if a.local and a.local != a.out:
+        print(f"\nSynchronisation finale vers {a.out} :")
+        ok = sync_to_drive(work, a.out)
+        print("✓ Drive à jour, byte pour byte." if ok else "❌ Drive pas encore à jour : relance `prepare_mix.py sync --local "
+              f"{a.local} --out {a.out}` dans quelques minutes.")
 
 
 def finalize(out: str, existing: str, tok, plan: List[mixplan.Source], st: State) -> None:
@@ -325,9 +385,14 @@ def main() -> None:
     q.add_argument("--only", default="", help="noms de sources séparés par des virgules (ex. essai rapide)")
     q.add_argument("--val_permille", type=int, default=3); q.add_argument("--allow_nc", action="store_true")
     q.add_argument("--skip_probe", action="store_true", help="ne pas vérifier les filtres avant de commencer (déconseillé)")
+    q.add_argument("--local", default="", help="écrit ici (ex. /content/v23_local, disque rapide de la session) puis pousse vers "
+                   "--out après chaque source et à la fin, avec vérification immédiate — évite le délai de synchronisation Drive "
+                   "entre deux sessions. Si vide (défaut) : écrit directement dans --out, comme avant.")
     q.set_defaults(f=cmd_build)
     q = sub.add_parser("status"); q.add_argument("--out", default="data/v23"); q.set_defaults(f=cmd_status)
     q = sub.add_parser("verify"); q.add_argument("--out", default="data/v23"); q.set_defaults(f=cmd_verify)
+    q = sub.add_parser("sync", help="pousse un dossier local déjà construit vers Drive, avec vérification (la « petite cellule »)")
+    q.add_argument("--local", required=True); q.add_argument("--out", required=True); q.set_defaults(f=cmd_sync)
     a = p.parse_args()
     a.f(a)
 

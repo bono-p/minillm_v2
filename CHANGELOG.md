@@ -1,5 +1,11 @@
 # Changelog — MiniLLM v2 (refonte après audit)
 
+## Écriture locale + synchronisation vérifiée vers Drive
+
+* **`prepare_mix.py build --local <chemin>`** : écrit d'abord sur le disque rapide de la session, puis pousse vers `--out` (Drive) après chaque source — copie incrémentale (seuls les octets manquants) suivie d'une vérification immédiate de taille, au lieu de compter sur la synchronisation Drive en tâche de fond.
+* **`prepare_mix.py sync --local <local> --out <drive>`** : relance seule la synchronisation + vérification, à tout moment, sans retélécharger quoi que ce soit.
+* `colab/Prepare_v23_data.ipynb` : la construction utilise `--local` par défaut, avec une cellule 4b dédiée à la resynchronisation/vérification.
+
 ## Décalage de synchronisation Drive entre sessions (vécu le 11/10/2026)
 
 * **Diagnostic** : `os.fsync` (déjà fait toutes les ~2 M tokens) garantit l'écriture locale dans la session qui construit les données, pas sa visibilité immédiate depuis une AUTRE session Colab — pour un fichier de plusieurs Go, Drive peut mettre 15 à 30 min à synchroniser entre deux sessions. Ce n'est pas un problème de fréquence d'écriture.

@@ -100,3 +100,14 @@ d'appels fsync pour un gain nul.
      build` (reprenable, ne refait pas ce qui est déjà là).
 4. `Pretrain_v23.ipynb` appelle maintenant `verify` automatiquement avant de calculer le planning, avec un message clair
    au lieu d'un `AssertionError` brut.
+
+
+## 11. Écriture locale + synchronisation vérifiée (demande du 11/10/2026)
+
+`prepare_mix.py build --local /content/v23_local --out <Drive>` écrit d'abord sur le disque rapide de la session (aucun
+aléa de synchronisation), puis pousse vers `--out` (Drive) **après chaque source**, en ne recopiant que les octets
+manquants et en **vérifiant immédiatement** (taille locale == taille Drive) avant de continuer — au lieu d'écrire
+directement sur Drive et de découvrir un éventuel décalage seulement dans une autre session, plus tard.
+
+`prepare_mix.py sync --local <local> --out <Drive>` est la « petite cellule » qui peut être relancée seule, à tout moment,
+pour repousser et reconfirmer sans rien retélécharger. `colab/Prepare_v23_data.ipynb` l'inclut en cellule 4b.

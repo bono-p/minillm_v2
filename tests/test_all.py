@@ -1198,3 +1198,37 @@ def test_v23_verify_command_detects_drive_sync_mismatch(tmp_path):
         raise AssertionError("aurait dû détecter l'écart et s'arrêter")
     except SystemExit as e:
         assert e.code == 1
+
+
+def test_v23_sync_to_drive_is_incremental_and_verified(tmp_path):
+    import prepare_mix
+    local, drive = str(tmp_path / "local"), str(tmp_path / "drive")
+    os.makedirs(os.path.join(local, "stable"))
+    open(os.path.join(local, "stable", "train.bin"), "wb").write(b"a" * 1000)
+    open(os.path.join(local, "state.json"), "w").write('{"x":1}')
+    assert prepare_mix.sync_to_drive(local, drive) is True
+    assert open(os.path.join(drive, "stable", "train.bin"), "rb").read() == b"a" * 1000
+    assert open(os.path.join(drive, "state.json")).read() == '{"x":1}'
+    with open(os.path.join(local, "stable", "train.bin"), "ab") as f:
+        f.write(b"b" * 500)                                   # simule la suite d'une source
+    assert prepare_mix.sync_to_drive(local, drive) is True
+    assert open(os.path.join(drive, "stable", "train.bin"), "rb").read() == open(os.path.join(local, "stable", "train.bin"), "rb").read()
+    l, r = prepare_mix.sync_file(os.path.join(local, "stable", "train.bin"), os.path.join(drive, "stable", "train.bin"))
+    assert l == r == 1500                                      # déjà synchronisé : rien à recopier, mais toujours vérifié
+
+
+def test_v23_cmd_sync_reports_success_and_failure(tmp_path):
+    import prepare_mix
+    local, drive = str(tmp_path / "l"), str(tmp_path / "d")
+    os.makedirs(os.path.join(local, "stable"))
+    open(os.path.join(local, "stable", "train.bin"), "wb").write(b"x" * 2000)
+
+    class A:
+        pass
+    a = A(); a.local, a.out = local, drive
+    try:
+        prepare_mix.cmd_sync(a)
+        raise AssertionError("cmd_sync appelle sys.exit, même en cas de succès")
+    except SystemExit as e:
+        assert e.code == 0
+    assert open(os.path.join(drive, "stable", "train.bin"), "rb").read() == b"x" * 2000
