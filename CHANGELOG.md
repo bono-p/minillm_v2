@@ -1,5 +1,12 @@
 # Changelog — MiniLLM v2 (refonte après audit)
 
+## Décalage de synchronisation Drive entre sessions (vécu le 11/10/2026)
+
+* **Diagnostic** : `os.fsync` (déjà fait toutes les ~2 M tokens) garantit l'écriture locale dans la session qui construit les données, pas sa visibilité immédiate depuis une AUTRE session Colab — pour un fichier de plusieurs Go, Drive peut mettre 15 à 30 min à synchroniser entre deux sessions. Ce n'est pas un problème de fréquence d'écriture.
+* **`prepare_mix.py verify`** : nouvelle commande qui compare la taille réelle des fichiers à celle enregistrée par `build`, et explique clairement la cause probable (synchronisation en cours vs écriture réellement interrompue) au lieu d'un `AssertionError` brut.
+* **`Pretrain_v23.ipynb`** : appelle `verify` automatiquement avant de calculer le planning ; en cas d'écart, remonte le Drive et réessaie (jusqu'à 5 fois, 1 min d'intervalle) avant de s'arrêter avec un message clair.
+* `docs/V2_3_PLAN.md` §10 documente la procédure.
+
 ## Rééquilibrage du plan après la première construction réelle (11/10/2026)
 
 * **Bug corrigé** : `prepare_mix.py` appelait `_piaf_window(context, ans_texte, 1200)` au lieu de `_piaf_window(context, ans_start, ans_len, width)` -> 100 % des lignes PIAF étaient rejetées (0 token obtenu). Corrigé, testé.

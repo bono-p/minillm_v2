@@ -6,6 +6,7 @@ prepare_mix.py — construit les données de pré-entraînement v2.3 (deux dossi
   python prepare_mix.py tree --repo PleIAs/common_corpus      # (réseau, rapide) organisation d'un gros dépôt : collections, langues, fichiers
   python prepare_mix.py build --out data/v23 --tokenizer data/tokenizer.json --existing data/pretrain
   python prepare_mix.py status --out data/v23
+  python prepare_mix.py verify --out data/v23                 # (nouvelle session) confirme que Drive a bien tout synchronisé
 
 `build` est reprenable : relance la même commande après une coupure de session ; les fichiers sont tronqués à la dernière position
 enregistrée, donc le résultat est identique à un run sans coupure. Entraînement ensuite (voir docs/V2_3_PLAN.md) :
@@ -272,6 +273,42 @@ def cmd_status(a) -> None:
     print("fichiers :", st.d["files"])
 
 
+def cmd_verify(a) -> None:
+    """Compare la taille RÉELLE des fichiers sur disque à celle enregistrée dans state.json au moment de l'écriture.
+    Utile après avoir changé de session (ou d'ordinateur) : Google Drive peut mettre du temps à synchroniser un gros fichier
+    entre deux sessions ; `os.fsync` garantit l'écriture LOCALE au moment du `build`, pas la disponibilité immédiate ailleurs.
+    Lancer cette commande dans une session FRAÎCHE (remonte le Drive d'abord) donne une réponse sûre, sans deviner."""
+    st_path = os.path.join(a.out, "state.json")
+    if not os.path.exists(st_path):
+        sys.exit(f"{st_path} introuvable.")
+    st = State(st_path)
+    ok = True
+    print(f"Vérification de {a.out} (état enregistré lors du dernier `build`) :\n")
+    for key, expected in st.d["files"].items():
+        if key == "stable":
+            path = os.path.join(a.out, "stable", "train.bin")
+        elif key == "decay":
+            path = os.path.join(a.out, "decay", "train.bin")
+        else:
+            path = os.path.join(a.out, "val_new.bin")
+        got = os.path.getsize(path) if os.path.exists(path) else -1
+        same = got == expected
+        ok = ok and same
+        mark = "✓" if same else ("❌ MANQUANT" if got < 0 else "❌ TAILLE DIFFÉRENTE")
+        gap = "" if same else f"  (écart {expected - got:+,} o)"
+        print(f"  {mark}  {key:<10} attendu {expected:>14,} o | trouvé {got:>14,} o{gap}")
+    if ok:
+        print("\n✓ Tout correspond : les données sont intactes et complètes telles qu'enregistrées par `build`.")
+    else:
+        print("\n⚠️  Écart détecté. Deux causes possibles, dans cet ordre de probabilité :")
+        print("  1) Synchronisation Drive pas terminée entre la session qui a écrit et celle-ci : remonte le Drive avec "
+              "force_remount=True, attends quelques minutes (jusqu'à 15-30 min pour un fichier de plusieurs Go), puis relance "
+              "cette commande. Le fichier est très probablement déjà complet côté Drive, juste pas encore visible ici.")
+        print("  2) La dernière session a été interrompue avant la fin de l'écriture : dans ce cas, relance `prepare_mix.py build` "
+              "(reprenable) — il continuera depuis la taille réellement présente, rien n'est à refaire depuis le début.")
+        sys.exit(1)
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description="MiniLLM v2.3 — préparation du mélange de données")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -290,6 +327,7 @@ def main() -> None:
     q.add_argument("--skip_probe", action="store_true", help="ne pas vérifier les filtres avant de commencer (déconseillé)")
     q.set_defaults(f=cmd_build)
     q = sub.add_parser("status"); q.add_argument("--out", default="data/v23"); q.set_defaults(f=cmd_status)
+    q = sub.add_parser("verify"); q.add_argument("--out", default="data/v23"); q.set_defaults(f=cmd_verify)
     a = p.parse_args()
     a.f(a)
 

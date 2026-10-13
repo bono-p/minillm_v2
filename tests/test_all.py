@@ -1176,3 +1176,25 @@ def test_v23_piaf_prepare_uses_correct_signature():
     m = prep(row)
     assert m is not None and m[1]["content"].startswith("330 mètres") and "330 mètres" in m[0]["content"]
     assert prep({"context": "x", "answers": {"text": [], "answer_start": []}, "question": "q"}) is None
+
+
+def test_v23_verify_command_detects_drive_sync_mismatch(tmp_path):
+    import json
+    import prepare_mix
+    d = tmp_path
+    (d / "stable").mkdir()
+    (d / "decay").mkdir()
+    (d / "stable" / "train.bin").write_bytes(b"x" * 1000)
+    (d / "decay" / "train.bin").write_bytes(b"x" * 500)
+    (d / "val_new.bin").write_bytes(b"x" * 10)
+    json.dump({"sources": {}, "files": {"stable": 1000, "decay": 500, "val": 10}}, open(d / "state.json", "w"))
+
+    class A:
+        out = str(d)
+    prepare_mix.cmd_verify(A())                                    # tout correspond : ne doit PAS lever
+    (d / "stable" / "train.bin").write_bytes(b"x" * 400)            # simule un fichier Drive pas encore synchronisé
+    try:
+        prepare_mix.cmd_verify(A())
+        raise AssertionError("aurait dû détecter l'écart et s'arrêter")
+    except SystemExit as e:
+        assert e.code == 1

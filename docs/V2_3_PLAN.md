@@ -77,3 +77,26 @@ python prepare_mix.py tree --repo PleIAs/common_corpus --depth 2                
 ```
 
 Si la sonde échoue, corrige `filters={"open_type": ...}` dans `mixplan.py` avec la valeur réelle qu'elle affiche, puis relance `build` : la commande est reprenable, rien de ce qui a déjà été écrit n'est perdu.
+
+
+## 10. Décalage de synchronisation Google Drive (gros fichiers, entre deux sessions)
+
+Vécu le 11/10/2026 : une session de `build` a bien écrit et confirmé localement (`os.fsync`, toutes les ~2 M tokens) un
+`stable/train.bin` de 8,36 Go. Une **nouvelle** session Colab, ouverte ensuite pour l'entraînement, a remonté le Drive et vu
+une version plus ancienne et plus petite du même fichier. `os.fsync` garantit l'écriture dans le cache local du montage
+FUSE Drive de la session qui écrit ; il ne garantit pas que la copie cloud soit immédiatement visible depuis une AUTRE
+session. Pour un fichier de plusieurs Go, ce délai peut atteindre 15 à 30 minutes.
+
+**Ce n'est pas un problème de fréquence d'écriture** (le moteur checkpoint déjà toutes les ~2 M tokens, soit des centaines de
+fois par fichier) : écrire plus souvent ne change rien au délai de synchronisation Drive lui-même, et ferait même plus
+d'appels fsync pour un gain nul.
+
+**Procédure à suivre :**
+1. Après un `build` qui a beaucoup écrit, laisse quelques minutes avant d'ouvrir une nouvelle session dessus.
+2. Dans la nouvelle session, avant d'entraîner : `drive.mount('/content/drive', force_remount=True)`.
+3. `python prepare_mix.py verify --out data/v23` — compare la taille réelle des fichiers à celle enregistrée par `build`.
+   - Tout correspond : les données sont bonnes, entraîne sans crainte.
+   - Écart : attends encore quelques minutes et relance `verify` ; si l'écart persiste longtemps, relance `prepare_mix.py
+     build` (reprenable, ne refait pas ce qui est déjà là).
+4. `Pretrain_v23.ipynb` appelle maintenant `verify` automatiquement avant de calculer le planning, avec un message clair
+   au lieu d'un `AssertionError` brut.
