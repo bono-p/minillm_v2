@@ -111,3 +111,25 @@ directement sur Drive et de découvrir un éventuel décalage seulement dans une
 
 `prepare_mix.py sync --local <local> --out <Drive>` est la « petite cellule » qui peut être relancée seule, à tout moment,
 pour repousser et reconfirmer sans rien retélécharger. `colab/Prepare_v23_data.ipynb` l'inclut en cellule 4b.
+
+## 12. Shards (12/10/2026) : fini le `train.bin` unique
+
+Suite au décalage de synchronisation Drive persistant même avec `--local`/`sync` (un `train.bin` de plusieurs Go, sans
+cesse réécrit par des centaines d'appends, reste le cas le plus défavorable pour Drive), le format de sortie change :
+
+- `stable/` et `decay/` contiennent désormais `shard_00000.bin`, `shard_00001.bin`, … au lieu d'un seul `train.bin`.
+- Chaque shard est plafonné à `--shard_tokens` (100 M tokens ≈ 200 Mo par défaut). Une fois fermé, un shard est
+  **immuable** : il n'est plus jamais modifié, ni resynchronisé une fois confirmé.
+- Seul le shard **en cours** (donc toujours ≤ 200 Mo) continue d'être synchronisé en continu.
+- `data.py` lit directement les shards (`ShardedMemmap`), sans jamais les recoller en un fichier unique : `train.py`
+  n'a rien à faire de spécial, `--data_dir data/v23/stable` fonctionne tel quel.
+- `prepare_mix.py verify`, `sync`, `status` et `finalize()` sont tous adaptés aux shards (voir `state.json["shards"]`).
+- Rétrocompatible : un dossier avec un `train.bin` classique (v2.1/v2.2) continue de fonctionner sans changement.
+
+## 13. Conversations Reddit FR — licence non tranchée
+
+Ajoutée comme CANDIDATE (`mixplan.EXTRA_CANDIDATES`, pas dans `DEFAULT_PLAN`) : `FrancophonIA/LELU` (556 621
+conversations, 1,58 M tours de parole, Reddit FR). Licence de réutilisation non confirmée (contenu Reddit réexporté via
+BigQuery/Kaggle) et nom exact de la colonne « conversations » non vérifié. `validate()` la signale tant que ce n'est
+pas tranché ; elle n'affecte jamais `build` sans un `--only reddit_fr` explicite. Vérifier d'abord avec `prepare_mix.py
+tree --repo FrancophonIA/LELU` et `inspect`, puis décider.

@@ -94,6 +94,20 @@ DEFAULT_PLAN: List[Source] = [
                 "Corrige un bug du 11/10/2026 : prepare_mix.py appelait _piaf_window() avec le mauvais signature -> 100% des lignes rejetées"),
 ]
 
+# ── candidates HORS du plan par défaut (en attente d'une décision, n'affectent jamais `build` sans --only) ─────────────
+# Conversations Reddit FR (demande du 12/10/2026). FrancophonIA/LELU (556 621 conversations, 1,58 M tours de parole)
+# vient d'un export public BigQuery du contenu Reddit, repris via un dataset Kaggle : je n'ai pas trouvé de mention
+# claire de licence autorisant explicitement cette réutilisation (les conditions d'utilisation de Reddit encadrent la
+# redistribution en masse de contenu utilisateur), ni confirmé le nom réel de la colonne qui contiendrait des
+# conversations groupées (à vérifier avec `prepare_mix.py tree --repo FrancophonIA/LELU` et `inspect`). `license="unknown"`
+# fait que `validate()` la signale et que `build` refuse de la traiter tant qu'elle n'est pas explicitement ajoutée au
+# plan ET que la licence n'est pas tranchée (en repassant `license="permissive"` ici, en connaissance de cause).
+EXTRA_CANDIDATES: List[Source] = [
+    Source("reddit_fr", "hf_chat", "conversations", decay=int(0.05 * B), hf_path="FrancophonIA/LELU",
+           text_field="conversations", est_available_tokens=int(60 * M), max_epochs=5.0, license="unknown",
+           note="conversations Reddit FR nettoyées ; licence ET nom de colonne à vérifier avant tout usage"),
+]
+
 # Sources interdites par défaut (licence non commerciale) : listées pour mémoire, jamais dans le plan par défaut.
 EXCLUDED_NC = {
     "OpenLLM-France/Lucie-Training-Dataset": "CC BY-NC-SA 4.0 (fiche Hugging Face)",

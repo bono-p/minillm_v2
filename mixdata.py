@@ -167,31 +167,56 @@ class State:
         os.replace(tmp, self.path)
 
 
-class MixWriter:
-    """Écrit `<out>/<phase>/train.bin` (tokens du mélange) et `<out>/val_new.bin` (documents de validation des nouvelles sources)."""
+def shard_name(idx: int) -> str:
+    return f"shard_{idx:05d}.bin"
 
-    def __init__(self, out_dir: str, tok, state: State, dtype=np.uint16, val_permille: int = 3):
+
+class MixWriter:
+    """Écrit `<out>/<phase>/shard_NNNNN.bin` (tokens du mélange, en PETITS fichiers plafonnés à `shard_tokens`) et
+    `<out>/val_new.bin` (documents de validation des nouvelles sources).
+
+    Pourquoi des shards et pas un seul `train.bin` géant : un fichier de plusieurs Go, réécrit en continu, est le cas le
+    plus défavorable pour la synchronisation Google Drive entre deux sessions (vécu le 11-12/10/2026 : `os.fsync` confirme
+    l'écriture locale dans la session qui écrit, pas sa disponibilité dans une AUTRE session, et ce délai peut dépasser
+    plusieurs heures pour un gros fichier sans cesse modifié). Un shard fermé est un petit fichier IMMUABLE (par défaut
+    100 M tokens ≈ 200 Mo) : il ne change plus jamais après sa fermeture, ce qui est le cas le plus favorable pour Drive.
+    `train.py` (via `data.ShardedMemmap`) lit directement ces fragments, sans jamais les recoller en un seul fichier.
+    """
+
+    def __init__(self, out_dir: str, tok, state: State, dtype=np.uint16, val_permille: int = 3, shard_tokens: int = 100_000_000):
         self.out, self.tok, self.state, self.dtype, self.val_permille = out_dir, tok, state, dtype, val_permille
         self.itemsize = np.dtype(dtype).itemsize
+        self.shard_tokens = shard_tokens
         for ph in ("stable", "decay"):
             os.makedirs(os.path.join(out_dir, ph), exist_ok=True)
-        self.paths = {"stable": os.path.join(out_dir, "stable", "train.bin"), "decay": os.path.join(out_dir, "decay", "train.bin"),
-                      "val": os.path.join(out_dir, "val_new.bin")}
-        self._truncate_to_state()
-        self.files = {k: open(p, "ab") for k, p in self.paths.items()}
-
-    def _truncate_to_state(self) -> None:
-        """Cohérence après interruption : la taille de chaque fichier doit être celle du dernier état enregistré."""
-        for k, p in self.paths.items():
-            want = self.state.d["files"].get(k, 0)
-            have = os.path.getsize(p) if os.path.exists(p) else 0
+            self.state.d.setdefault("shards", {}).setdefault(ph, [])     # liste de {"file","tokens"} : shards FERMÉS (immuables)
+        self.val_path = os.path.join(out_dir, "val_new.bin")
+        self.cur_fh: Dict[str, "object"] = {}
+        self.cur_tokens: Dict[str, int] = {}
+        for ph in ("stable", "decay"):
+            idx = len(self.state.d["shards"][ph])
+            path = os.path.join(out_dir, ph, shard_name(idx))
+            want = self.state.d["files"].get(f"{ph}_current", 0)
+            have = os.path.getsize(path) if os.path.exists(path) else 0
             if have < want:
-                raise RuntimeError(f"{p} est plus petit ({have} o) que l'état enregistré ({want} o) : fichier corrompu, supprime le dossier de sortie.")
+                raise RuntimeError(f"{path} est plus petit ({have} o) que l'état enregistré ({want} o) : fichier corrompu, supprime le dossier de sortie.")
             if have > want:
-                with open(p, "r+b") as f:
+                with open(path, "r+b") as f:
                     f.truncate(want)
-            elif not os.path.exists(p):
-                open(p, "wb").close()
+            elif not os.path.exists(path):
+                open(path, "wb").close()
+            self.cur_fh[ph] = open(path, "ab")
+            self.cur_tokens[ph] = want // self.itemsize
+        want_val = self.state.d["files"].get("val", 0)
+        have_val = os.path.getsize(self.val_path) if os.path.exists(self.val_path) else 0
+        if have_val < want_val:
+            raise RuntimeError(f"{self.val_path} est plus petit ({have_val} o) que l'état enregistré ({want_val} o) : supprime le dossier de sortie.")
+        if have_val > want_val:
+            with open(self.val_path, "r+b") as f:
+                f.truncate(want_val)
+        elif not os.path.exists(self.val_path):
+            open(self.val_path, "wb").close()
+        self.val_fh = open(self.val_path, "ab")
 
     def encode(self, doc: Doc) -> List[int]:
         if isinstance(doc, str):
@@ -201,19 +226,58 @@ class MixWriter:
         return ids + [self.tok.eot_id]
 
     def write(self, key: str, ids: List[int]) -> None:
-        self.files[key].write(np.asarray(ids, dtype=self.dtype).tobytes())
+        if key == "val":
+            self.val_fh.write(np.asarray(ids, dtype=self.dtype).tobytes())
+            return
+        self.write_tokens(key, np.asarray(ids, dtype=self.dtype))
+
+    def write_tokens(self, phase: str, arr) -> None:
+        """Comme `write`, mais prend directement un tableau déjà tokenisé (utilisé par `run_existing_bin`)."""
+        arr = np.asarray(arr, dtype=self.dtype)
+        pos = 0
+        while pos < len(arr):
+            room = self.shard_tokens - self.cur_tokens[phase]
+            take = min(room, len(arr) - pos)
+            if take > 0:
+                self.cur_fh[phase].write(arr[pos:pos + take].tobytes())
+                self.cur_tokens[phase] += take
+                pos += take
+            if self.cur_tokens[phase] >= self.shard_tokens:
+                self._close_shard(phase)
+
+    def _close_shard(self, phase: str) -> None:
+        f = self.cur_fh[phase]
+        f.flush()
+        os.fsync(f.fileno())
+        f.close()
+        idx = len(self.state.d["shards"][phase])
+        self.state.d["shards"][phase].append({"file": shard_name(idx), "tokens": self.cur_tokens[phase]})
+        self.state.d["files"][f"{phase}_current"] = 0
+        self.state.save()
+        new_path = os.path.join(self.out, phase, shard_name(idx + 1))
+        self.cur_fh[phase] = open(new_path, "wb")
+        self.cur_tokens[phase] = 0
 
     def checkpoint(self) -> None:
-        for k, f in self.files.items():
+        for ph in ("stable", "decay"):
+            f = self.cur_fh[ph]
             f.flush()
             os.fsync(f.fileno())
-            self.state.d["files"][k] = f.tell()
+            self.state.d["files"][f"{ph}_current"] = self.cur_tokens[ph] * self.itemsize
+        self.val_fh.flush()
+        os.fsync(self.val_fh.fileno())
+        self.state.d["files"]["val"] = self.val_fh.tell()
         self.state.save()
 
     def close(self) -> None:
         self.checkpoint()
-        for f in self.files.values():
+        for f in self.cur_fh.values():
             f.close()
+        self.val_fh.close()
+
+    def total_tokens(self, phase: str) -> int:
+        """Shards fermés + shard courant (partiel) — toujours exact, utilisé par `finalize()`."""
+        return sum(s["tokens"] for s in self.state.d["shards"][phase]) + self.cur_tokens[phase]
 
 
 def run_source(writer: MixWriter, name: str, quotas: Dict[str, int], iter_factory: Callable[[int, int], Iterator[Doc]],
@@ -281,7 +345,7 @@ def run_existing_bin(writer: MixWriter, name: str, quotas: Dict[str, int], bin_p
             chunk = np.asarray(data[b * block:(b + 1) * block])
             if len(chunk) > need:
                 chunk = chunk[:need]
-            writer.files[phase].write(chunk.tobytes())
+            writer.write_tokens(phase, chunk)
             st["docs_consumed"] += 1
             st["tokens"][phase] += len(chunk)
             need -= len(chunk)

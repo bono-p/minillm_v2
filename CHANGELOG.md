@@ -1,5 +1,13 @@
 # Changelog — MiniLLM v2 (refonte après audit)
 
+## Shards (12/10/2026) : fini le `train.bin` unique
+
+* **`mixdata.MixWriter`** écrit désormais des shards plafonnés (`--shard_tokens`, 100 M par défaut ≈ 200 Mo) au lieu d'un `train.bin` unique sans cesse réécrit — le décalage de synchronisation Drive persistait même avec `--local`/`sync` pour un fichier de plusieurs Go en écriture continue ; un shard fermé est petit et immuable.
+* **`data.ShardedMemmap`** (nouveau) : `train.py` lit directement les fragments, sans jamais les recoller sur disque. Rétrocompatible avec un `train.bin` unique (v2.1/v2.2).
+* `prepare_mix.py verify`, `sync`, `finalize()` adaptés aux shards. Tests : rotation, reprise après interruption (identique octet pour octet), synchronisation incrémentale shard par shard.
+* **`mixplan.EXTRA_CANDIDATES`** : conversations Reddit FR (`FrancophonIA/LELU`), licence non confirmée — n'affecte jamais `DEFAULT_PLAN`/`build` sans opt-in explicite (`--only reddit_fr`).
+* `colab/Pretrain_v23.ipynb` lit la taille de la phase stable depuis `meta.json` (somme des shards) au lieu de `stable/train.bin`.
+
 ## Écriture locale + synchronisation vérifiée vers Drive
 
 * **`prepare_mix.py build --local <chemin>`** : écrit d'abord sur le disque rapide de la session, puis pousse vers `--out` (Drive) après chaque source — copie incrémentale (seuls les octets manquants) suivie d'une vérification immédiate de taille, au lieu de compter sur la synchronisation Drive en tâche de fond.

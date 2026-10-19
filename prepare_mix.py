@@ -24,7 +24,7 @@ import sys
 from typing import Callable, Dict, Iterator, List, Optional, Tuple
 
 import mixplan
-from mixdata import (Decontaminator, MixWriter, State, chat_ok, clean_ocr, eval_questions, quality_ok, run_existing_bin, run_source,
+from mixdata import (Decontaminator, MixWriter, State, chat_ok, clean_ocr, eval_questions, quality_ok, run_existing_bin, run_source, shard_name,
                      to_messages)
 
 
@@ -203,24 +203,49 @@ def sync_file(local_path: str, remote_path: str) -> Tuple[int, int]:
 
 
 def sync_to_drive(local_dir: str, remote_dir: str, log: Callable[[str], None] = print) -> bool:
-    """Pousse `local_dir` (écriture rapide, sans aléas de synchronisation) vers `remote_dir` (ex. le Drive), fichier par
-    fichier, en ne recopiant que ce qui manque, puis VÉRIFIE la taille obtenue avant de continuer. C'est la « petite
-    cellule » qui joue le rôle de vérificateur : un appel = une confirmation immédiate, au lieu de devoir attendre et
-    espérer qu'une synchronisation en tâche de fond se termine."""
-    big = ["stable/train.bin", "decay/train.bin", "val_new.bin"]
-    small = ["state.json", "tokenizer.json", "mix_report.json", "stable/val.bin", "decay/val.bin", "stable/meta.json", "decay/meta.json"]
+    """Pousse `local_dir` (écriture rapide, sans aléas de synchronisation) vers `remote_dir` (ex. le Drive), shard par
+    shard, puis VÉRIFIE la taille obtenue avant de continuer. C'est la « petite cellule » qui joue le rôle de
+    vérificateur : un appel = une confirmation immédiate, au lieu de devoir attendre et espérer qu'une synchronisation en
+    tâche de fond se termine. Les shards FERMÉS sont de petits fichiers immuables (copiés une seule fois, jamais
+    recopiés une fois confirmés) ; seul le shard COURANT (borné par --shard_tokens) est synchronisé en continu, donc
+    jamais plus gros que ça — à la différence de l'ancien `train.bin` unique, sans cesse grossi."""
+    st_path = os.path.join(local_dir, "state.json")
+    st = State(st_path) if os.path.exists(st_path) else None
     ok = True
-    for rel in big:
-        lp, rp = os.path.join(local_dir, rel), os.path.join(remote_dir, rel)
-        if not os.path.exists(lp):
-            continue
-        l, r = sync_file(lp, rp)
-        same = l == r
-        ok = ok and same
-        log(f"  {'✓' if same else '❌'} {rel:<20} local {l:>14,} o -> drive {r:>14,} o")
-    for rel in small:                                               # petits fichiers (état, méta) : toujours réécrits en entier
+    for ph in ("stable", "decay"):
+        manifest = st.d.get("shards", {}).get(ph, []) if st else []
+        for i, entry in enumerate(manifest):
+            name = entry["file"]
+            if entry.get("synced"):
+                continue
+            lp, rp = os.path.join(local_dir, ph, name), os.path.join(remote_dir, ph, name)
+            if not os.path.exists(lp):
+                continue
+            l, r = sync_file(lp, rp)
+            same = l == r
+            ok = ok and same
+            log(f"  {'✓' if same else '❌'} {ph}/{name:<16} (fermé) local {l:>12,} o -> drive {r:>12,} o")
+            if same and st:
+                entry["synced"] = True
+        cur_idx = len(manifest)
+        cur_name = shard_name(cur_idx)
+        lp, rp = os.path.join(local_dir, ph, cur_name), os.path.join(remote_dir, ph, cur_name)
+        if os.path.exists(lp):
+            l, r = sync_file(lp, rp)
+            same = l == r
+            ok = ok and same
+            log(f"  {'✓' if same else '❌'} {ph}/{cur_name:<16} (en cours) local {l:>12,} o -> drive {r:>12,} o")
+    if st:
+        st.save()
+    for rel in ("val_new.bin",):
         lp, rp = os.path.join(local_dir, rel), os.path.join(remote_dir, rel)
         if os.path.exists(lp):
+            l, r = sync_file(lp, rp)
+            ok = ok and (l == r)
+            log(f"  {'✓' if l == r else '❌'} {rel:<24} local {l:>12,} o -> drive {r:>12,} o")
+    for rel in ("state.json", "tokenizer.json", "mix_report.json", "stable/val.bin", "decay/val.bin", "stable/meta.json", "decay/meta.json"):
+        lp, rp = os.path.join(local_dir, rel), os.path.join(remote_dir, rel)
+        if os.path.exists(lp):                                      # petits fichiers (état, méta) : toujours réécrits en entier
             os.makedirs(os.path.dirname(os.path.abspath(rp)), exist_ok=True)
             shutil.copy(lp, rp)
     return ok
@@ -238,7 +263,8 @@ def cmd_build(a) -> None:
     plan = mixplan.scaled(mixplan.DEFAULT_PLAN, int(a.budget)) if a.budget else list(mixplan.DEFAULT_PLAN)
     only = [x for x in a.only.split(",") if x]
     if only:
-        plan = [s for s in plan if s.name in only]
+        candidates = {s.name: s for s in mixplan.DEFAULT_PLAN + mixplan.EXTRA_CANDIDATES}      # --only peut cibler un EXTRA_CANDIDATES
+        plan = [candidates[n] for n in only if n in candidates]
     issues = mixplan.validate(plan, allow_nc=a.allow_nc)
     for p in issues:
         print("⚠️ ", p)
@@ -257,7 +283,7 @@ def cmd_build(a) -> None:
     need = mixplan.storage_bytes(plan) + 200_000_000
     free = _free_bytes(work)
     st = State(os.path.join(work, "state.json"))
-    already = sum(os.path.getsize(os.path.join(work, ph, "train.bin")) for ph in ("stable", "decay") if os.path.exists(os.path.join(work, ph, "train.bin")))
+    already = sum(e["tokens"] * 2 for ph in ("stable", "decay") for e in st.d.get("shards", {}).get(ph, []))
     if free is not None and free + already < need:
         sys.exit(f"Espace disque insuffisant : {need / 1e9:.1f} Go nécessaires, {(free + already) / 1e9:.1f} Go disponibles dans {work}. "
                  f"Réduis --budget (ex. {int(5e9 * (free + already) / need * 0.9):,}) ou libère de la place.")
@@ -268,7 +294,7 @@ def cmd_build(a) -> None:
     tok = MiniTokenizer(os.path.join(work, "tokenizer.json"))
     deco = Decontaminator(eval_questions("."))
     print(f"Décontamination : {len(deco)} questions d'évaluation à écarter des conversations.")
-    writer = MixWriter(work, tok, st, val_permille=a.val_permille)
+    writer = MixWriter(work, tok, st, val_permille=a.val_permille, shard_tokens=int(a.shard_tokens))
     try:
         for src in plan:
             quotas = {"stable": src.stable, "decay": src.decay}
@@ -285,7 +311,7 @@ def cmd_build(a) -> None:
                 sync_to_drive(work, a.out, log=lambda m: print("  " + m))
     finally:
         writer.close()
-    finalize(work, a.existing, tok, plan, st)
+    finalize(work, a.existing, tok, plan, st, writer)
     if a.local and a.local != a.out:
         print(f"\nSynchronisation finale vers {a.out} :")
         ok = sync_to_drive(work, a.out)
@@ -293,9 +319,10 @@ def cmd_build(a) -> None:
               f"{a.local} --out {a.out}` dans quelques minutes.")
 
 
-def finalize(out: str, existing: str, tok, plan: List[mixplan.Source], st: State) -> None:
+def finalize(out: str, existing: str, tok, plan: List[mixplan.Source], st: State, writer: Optional[MixWriter] = None) -> None:
     """Écrit meta.json de chaque phase. val.bin : celui d'un corpus existant s'il y en a un (val_loss comparable à celle de ce corpus),
-    sinon les documents de validation des nouvelles sources (val_new.bin)."""
+    sinon les documents de validation des nouvelles sources (val_new.bin). n_train_tokens est la somme des shards (fermés + en cours) :
+    `data.ShardedMemmap` les lit directement, il n'y a jamais de `train.bin` unique à constituer."""
     old_val = os.path.join(existing, "val.bin") if existing else ""
     meta_old = json.load(open(os.path.join(existing, "meta.json"))) if existing and os.path.exists(os.path.join(existing, "meta.json")) else {}
     val_src = old_val if old_val and os.path.exists(old_val) else os.path.join(out, "val_new.bin")
@@ -305,10 +332,12 @@ def finalize(out: str, existing: str, tok, plan: List[mixplan.Source], st: State
         d = os.path.join(out, ph)
         if os.path.exists(val_src):
             shutil.copy(val_src, os.path.join(d, "val.bin"))
-        n_train = os.path.getsize(os.path.join(d, "train.bin")) // 2
+        n_train = writer.total_tokens(ph) if writer is not None else sum(s["tokens"] for s in st.d.get("shards", {}).get(ph, []))
         n_val = os.path.getsize(os.path.join(d, "val.bin")) // 2 if os.path.exists(os.path.join(d, "val.bin")) else 0
         meta = {"dtype": "uint16", "vocab_size": tok.vocab_size, "padded_vocab_size": tok.padded_vocab_size, "eot_id": tok.eot_id,
                 "n_train_tokens": n_train, "n_val_tokens": n_val, "tokenizer_sha": getattr(tok, "sha", None), "phase": ph,
+                "shard_tokens": max((e["tokens"] for e in st.d.get("shards", {}).get(ph, [])), default=0) or None,
+                "n_shards": len(st.d.get("shards", {}).get(ph, [])),
                 "val_note": ("val.bin = validation du corpus existant" if val_src == old_val else
                              "val.bin = documents de validation des nouvelles sources (3 pour mille des documents de chaque source, écartés de l'entraînement) : "
                              "val_loss NON comparable à celle des versions précédentes"),
@@ -334,8 +363,8 @@ def cmd_status(a) -> None:
 
 
 def cmd_verify(a) -> None:
-    """Compare la taille RÉELLE des fichiers sur disque à celle enregistrée dans state.json au moment de l'écriture.
-    Utile après avoir changé de session (ou d'ordinateur) : Google Drive peut mettre du temps à synchroniser un gros fichier
+    """Compare la taille RÉELLE de chaque shard sur disque à celle enregistrée dans state.json au moment de l'écriture.
+    Utile après avoir changé de session (ou d'ordinateur) : Google Drive peut mettre du temps à synchroniser un fichier
     entre deux sessions ; `os.fsync` garantit l'écriture LOCALE au moment du `build`, pas la disponibilité immédiate ailleurs.
     Lancer cette commande dans une session FRAÎCHE (remonte le Drive d'abord) donne une réponse sûre, sans deviner."""
     st_path = os.path.join(a.out, "state.json")
@@ -343,20 +372,31 @@ def cmd_verify(a) -> None:
         sys.exit(f"{st_path} introuvable.")
     st = State(st_path)
     ok = True
-    print(f"Vérification de {a.out} (état enregistré lors du dernier `build`) :\n")
-    for key, expected in st.d["files"].items():
-        if key == "stable":
-            path = os.path.join(a.out, "stable", "train.bin")
-        elif key == "decay":
-            path = os.path.join(a.out, "decay", "train.bin")
-        else:
-            path = os.path.join(a.out, "val_new.bin")
-        got = os.path.getsize(path) if os.path.exists(path) else -1
-        same = got == expected
-        ok = ok and same
-        mark = "✓" if same else ("❌ MANQUANT" if got < 0 else "❌ TAILLE DIFFÉRENTE")
-        gap = "" if same else f"  (écart {expected - got:+,} o)"
-        print(f"  {mark}  {key:<10} attendu {expected:>14,} o | trouvé {got:>14,} o{gap}")
+    for ph in ("stable", "decay"):
+        manifest = st.d.get("shards", {}).get(ph, [])
+        for entry in manifest:
+            path = os.path.join(a.out, ph, entry["file"])
+            expected = entry["tokens"] * 2
+            got = os.path.getsize(path) if os.path.exists(path) else -1
+            same = got == expected
+            ok = ok and same
+            if not same:
+                print(f"  ❌  {ph}/{entry['file']:<16} attendu {expected:>14,} o | trouvé {got:>14,} o")
+        cur_expected = st.d["files"].get(f"{ph}_current", 0)
+        if cur_expected > 0:
+            cur_path = os.path.join(a.out, ph, shard_name(len(manifest)))
+            got = os.path.getsize(cur_path) if os.path.exists(cur_path) else -1
+            same = got == cur_expected
+            ok = ok and same
+            if not same:
+                print(f"  ❌  {ph}/{shard_name(len(manifest))} (en cours) attendu {cur_expected:>14,} o | trouvé {got:>14,} o")
+        print(f"  ✓  {ph:<10} {len(manifest)} shard(s) fermé(s) + shard en cours — {sum(e['tokens'] for e in manifest) + cur_expected // 2:,} tokens")
+    expected_val = st.d["files"].get("val", 0)
+    got_val = os.path.getsize(os.path.join(a.out, "val_new.bin")) if os.path.exists(os.path.join(a.out, "val_new.bin")) else -1
+    same_val = got_val == expected_val
+    ok = ok and same_val
+    if not same_val:
+        print(f"  ❌  val        attendu {expected_val:>14,} o | trouvé {got_val:>14,} o")
     if ok:
         print("\n✓ Tout correspond : les données sont intactes et complètes telles qu'enregistrées par `build`.")
     else:
@@ -388,6 +428,8 @@ def main() -> None:
     q.add_argument("--local", default="", help="écrit ici (ex. /content/v23_local, disque rapide de la session) puis pousse vers "
                    "--out après chaque source et à la fin, avec vérification immédiate — évite le délai de synchronisation Drive "
                    "entre deux sessions. Si vide (défaut) : écrit directement dans --out, comme avant.")
+    q.add_argument("--shard_tokens", type=float, default=100_000_000, help="taille d'un shard en tokens (100 M ≈ 200 Mo par défaut) : "
+                   "des fichiers plus petits et immuables une fois fermés, au lieu d'un seul `train.bin` géant sans cesse réécrit.")
     q.set_defaults(f=cmd_build)
     q = sub.add_parser("status"); q.add_argument("--out", default="data/v23"); q.set_defaults(f=cmd_status)
     q = sub.add_parser("verify"); q.add_argument("--out", default="data/v23"); q.set_defaults(f=cmd_verify)

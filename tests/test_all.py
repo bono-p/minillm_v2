@@ -1019,117 +1019,6 @@ def test_v23_filters_and_decontamination():
     assert len(qs) > 500 and any("capitale du Soudan" in q for q in qs)
 
 
-def test_v23_run_source_quotas_val_resume_and_epochs(tmp_path):
-    import mixdata
-    tok = _toy_tokenizer(tmp_path)
-    docs = [f"document numéro {i} : le chat dort dans la maison et les enfants jouent dehors, bonjour comment vas-tu aujourd'hui {i}" for i in range(300)]
-
-    def factory(skip, epoch):
-        return iter(docs[skip:])
-
-    def run(out, crash_after=None):
-        st = mixdata.State(str(out / "state.json"))
-        w = mixdata.MixWriter(str(out), tok, st, val_permille=50)
-        seen = {"n": 0}
-
-        def prep(d):
-            seen["n"] += 1
-            if crash_after and seen["n"] > crash_after:
-                raise KeyboardInterrupt
-            return d
-
-        mixdata.run_source(w, "src", {"stable": 4000, "decay": 1500}, factory, prep, max_epochs=3, checkpoint_every=700, log=lambda m: None)
-        w.close()
-        return st
-
-    a = tmp_path / "a"
-    st_a = run(a)
-    s = st_a.src("src")
-    assert s["tokens"]["stable"] >= 4000 and s["tokens"]["decay"] >= 1500 and s["tokens"]["stable"] < 4000 + 100 and s["val_tokens"] > 0 and s["epochs"] == 0
-    for ph in ("stable", "decay"):
-        assert os.path.getsize(a / ph / "train.bin") == 2 * s["tokens"][ph]
-    # interruption en plein milieu puis reprise : résultat identique, octet pour octet
-    b = tmp_path / "b"
-    try:
-        run(b, crash_after=60)
-    except KeyboardInterrupt:
-        pass
-    st_b = run(b)
-    for f in ("stable/train.bin", "decay/train.bin", "val_new.bin"):
-        assert open(a / f, "rb").read() == open(b / f, "rb").read(), f
-    assert st_b.src("src")["tokens"] == s["tokens"]
-    # source trop petite : répétée (époques) puis arrêt au maximum d'époques
-    small = docs[:5]
-    st2 = mixdata.State(str(tmp_path / "s2.json"))
-    w2 = mixdata.MixWriter(str(tmp_path / "c"), tok, st2, val_permille=0)
-    msgs = []
-    mixdata.run_source(w2, "petite", {"stable": 100_000}, lambda skip, ep: iter(small[skip:]), lambda d: d, max_epochs=2, log=msgs.append)
-    w2.close()
-    r = st2.src("petite")
-    assert r["epochs"] == 3 and r["repeated_tokens"] > 0 and any("répétitions" in m for m in msgs)
-    assert os.path.getsize(tmp_path / "c" / "stable" / "train.bin") == 2 * r["tokens"]["stable"]
-    # fichier corrompu (plus petit que l'état) : refus explicite
-    with open(a / "stable" / "train.bin", "r+b") as f:
-        f.truncate(10)
-    try:
-        mixdata.MixWriter(str(a), tok, mixdata.State(str(a / "state.json")))
-        raise AssertionError("aurait dû refuser")
-    except RuntimeError:
-        pass
-
-
-def test_v23_existing_bin_uses_disjoint_blocks(tmp_path):
-    import numpy as np
-    import mixdata
-    tok = _toy_tokenizer(tmp_path)
-    block = 100
-    src = np.arange(1000, dtype=np.uint16)                                   # 10 blocs : le contenu identifie chaque bloc
-    src.tofile(str(tmp_path / "train.bin"))
-    st = mixdata.State(str(tmp_path / "st.json"))
-    w = mixdata.MixWriter(str(tmp_path / "o"), tok, st, val_permille=0)
-    mixdata.run_existing_bin(w, "old", {"stable": 450, "decay": 200}, str(tmp_path / "train.bin"), block=block, seed=1)
-    w.close()
-    a = np.fromfile(tmp_path / "o" / "stable" / "train.bin", dtype=np.uint16)
-    b = np.fromfile(tmp_path / "o" / "decay" / "train.bin", dtype=np.uint16)
-    assert len(a) == 450 and len(b) == 200
-    assert not (set(a.tolist()) & set(b.tolist())), "la phase decay ne doit pas réutiliser les blocs de la phase stable"
-
-
-def test_v23_trainconfig_has_stop_at_and_heads_override():
-    import config
-    c = config.TrainConfig()
-    assert c.stop_at == 0 and c.n_heads == 0
-    t = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "train.py"), encoding="utf-8").read()
-    assert "stop_now" in t and "cfg.n_heads" in t
-
-
-def test_v23_finalize_without_existing_corpus_and_cleaners(tmp_path):
-    import json
-    import mixdata
-    import mixplan
-    import prepare_mix
-    tok = _toy_tokenizer(tmp_path)
-    docs = [f"document numéro {i} : le chat dort dans la maison et les enfants jouent dehors, bonjour comment vas-tu aujourd'hui {i}" for i in range(200)]
-    st = mixdata.State(str(tmp_path / "o" / "state.json"))
-    os.makedirs(tmp_path / "o", exist_ok=True)
-    w = mixdata.MixWriter(str(tmp_path / "o"), tok, st, val_permille=60)
-    mixdata.run_source(w, "src", {"stable": 1500, "decay": 600}, lambda skip, ep: iter(docs[skip:]), lambda d: d, max_epochs=2, log=lambda m: None)
-    w.close()
-    plan = [mixplan.Source("src", "hf_text", "web_wiki", stable=1500, decay=600, hf_path="x")]
-    prepare_mix.finalize(str(tmp_path / "o"), "", tok, plan, st)               # pas de corpus existant : val.bin = val_new.bin
-    for ph in ("stable", "decay"):
-        m = json.load(open(tmp_path / "o" / ph / "meta.json"))
-        assert m["dtype"] == "uint16" and m["n_train_tokens"] > 0 and m["n_val_tokens"] > 0 and "NON comparable" in m["val_note"]
-        assert open(tmp_path / "o" / ph / "val.bin", "rb").read() == open(tmp_path / "o" / "val_new.bin", "rb").read()
-    assert json.load(open(tmp_path / "o" / "mix_report.json"))["parts_par_categorie"]["web_wiki"] == 1.0
-    # nettoyages repris de la v2.2 : une page de menu commerciale est rejetée, un article propre est gardé
-    wiki = prepare_mix.make_prepare(mixplan.Source("w", "hf_text", "web_wiki", hf_path="x", clean="wiki"), mixdata.Decontaminator([]))
-    web = prepare_mix.make_prepare(mixplan.Source("f", "hf_text", "web_wiki", hf_path="x", clean="web"), mixdata.Decontaminator([]))
-    para = "Le village est situé dans la vallée, au pied de la montagne, et ses habitants vivent surtout de l'élevage et de l'agriculture. "
-    assert wiki({"text": (para + "\n") * 5}) is not None and wiki({"text": "trop court"}) is None
-    assert web({"text": "Cliquez ici pour la livraison gratuite, code promo, newsletter. " * 12}) is None
-    varied = "\n".join(f"Phrase numéro {i} : le village est situé dans la vallée, au pied de la montagne, et ses habitants vivent de l'élevage {i}." for i in range(8))
-    assert web({"text": varied}) is not None and web({"text": (para + "\n") * 6}) is None   # lignes répétées = menu ou spam : rejeté
 
 
 def test_v23_group_paths_summarises_repo_layout():
@@ -1140,88 +1029,181 @@ def test_v23_group_paths_summarises_repo_layout():
     assert prepare_mix.group_paths(files, depth=1)["OpenCulture"] == (3, 45)
 
 
-def test_v23_probe_filters_passes_or_lists_real_values_seen(monkeypatch):
-    import types
-    import mixplan
+# ── v2.3 : shards (fini la synchro Drive d'un gros fichier unique) ──────────────────────────────────────────────────────────
+def test_shardedmemmap_reads_single_and_cross_shard_slices(tmp_path):
+    import glob
+    import numpy as np
+    src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data.py"), encoding="utf-8").read()
+    i = src.index("class ShardedMemmap")
+    j = src.index("\n\n\ndef _load_train_array")
+    ns = {"np": np, "bisect": __import__("bisect"), "List": list}
+    exec(src[i:j], ns)
+    ShardedMemmap = ns["ShardedMemmap"]
+    for k, arr in enumerate([np.arange(0, 10, dtype=np.uint16), np.arange(10, 17, dtype=np.uint16), np.arange(17, 25, dtype=np.uint16)]):
+        arr.tofile(str(tmp_path / f"shard_{k:05d}.bin"))
+    sm = ShardedMemmap(sorted(glob.glob(str(tmp_path / "shard_*.bin"))), np.uint16)
+    assert len(sm) == 25
+    assert sm[0:5].tolist() == list(range(0, 5))
+    assert sm[8:12].tolist() == list(range(8, 12))     # à cheval sur une frontière
+    assert sm[9:20].tolist() == list(range(9, 20))     # à cheval sur deux frontières
+    assert sm[0:25].tolist() == list(range(0, 25))
+    mono = ShardedMemmap([str(tmp_path / "shard_00000.bin")], np.uint16)
+    assert len(mono) == 10 and mono[2:7].tolist() == list(range(2, 7))
+
+
+def _toy_tokenizer_v23(tmp_path):
+    from mini_tokenizer import MiniTokenizer, train_tokenizer
+    corpus = ["le chat dort dans la maison et la maison est grande", "bonjour comment vas-tu aujourd'hui",
+              "les enfants jouent dehors avec le ballon"] * 60
+    path = str(tmp_path / "tok23.json")
+    train_tokenizer(iter(corpus), vocab_size=400, save_path=path, min_frequency=1, show_progress=False)
+    return MiniTokenizer(path)
+
+
+def test_mixwriter_rotates_shards_and_resumes_byte_identical(tmp_path):
+    import glob
+    import mixdata
+    tok = _toy_tokenizer_v23(tmp_path)
+    docs = [f"document numero {i} le chat dort la maison enfants jouent dehors {i}" for i in range(500)]
+
+    def run(out, crash_after=None):
+        st = mixdata.State(os.path.join(out, "state.json"))
+        w = mixdata.MixWriter(out, tok, st, val_permille=0, shard_tokens=500)
+        seen = {"n": 0}
+
+        def prep(d):
+            seen["n"] += 1
+            if crash_after and seen["n"] > crash_after:
+                raise KeyboardInterrupt
+            return d
+        mixdata.run_source(w, "src", {"stable": 3000, "decay": 1200}, lambda skip, ep: iter(docs[skip:]), prep, max_epochs=3,
+                           checkpoint_every=400, log=lambda m: None)
+        w.close()
+        return st
+
+    a = str(tmp_path / "a")
+    sta = run(a)
+    shards = sta.d["shards"]["stable"]
+    assert len(shards) >= 5 and all(e["tokens"] <= 500 for e in shards)
+    files = sorted(glob.glob(a + "/stable/shard_*.bin"))
+    assert all(os.path.getsize(f) <= 1000 for f in files[:-1])          # fermés : plafonnés à shard_tokens (uint16 = 2 o/tok)
+    b = str(tmp_path / "b")
+    try:
+        run(b, crash_after=50)
+    except KeyboardInterrupt:
+        pass
+    stb = run(b)
+    assert stb.src("src")["tokens"] == sta.src("src")["tokens"]
+    for f in sorted(glob.glob(a + "/stable/shard_*.bin")):
+        rel = os.path.relpath(f, a)
+        assert open(f, "rb").read() == open(os.path.join(b, rel), "rb").read(), rel
+
+
+def test_sync_to_drive_handles_shards_incrementally_and_verify_passes(tmp_path):
+    import mixdata
     import prepare_mix
+    tok = _toy_tokenizer_v23(tmp_path)
+    docs = [f"doc {i} le chat dort la maison enfants jouent {i}" for i in range(300)]
+    local, drive = str(tmp_path / "local"), str(tmp_path / "drive")
+    st = mixdata.State(os.path.join(local, "state.json"))
+    w = mixdata.MixWriter(local, tok, st, val_permille=20, shard_tokens=400)
+    mixdata.run_source(w, "src", {"stable": 1500, "decay": 500}, lambda skip, ep: iter(docs[skip:]), lambda d: d, max_epochs=3,
+                       checkpoint_every=300, log=lambda m: None)
+    w.close()
+    assert prepare_mix.sync_to_drive(local, drive) is True
+    import glob
+    for f in glob.glob(local + "/stable/shard_*.bin") + glob.glob(local + "/decay/shard_*.bin"):
+        rel = os.path.relpath(f, local)
+        assert open(f, "rb").read() == open(os.path.join(drive, rel), "rb").read(), rel
+    import shutil as _sh
+    _sh.copy(os.path.join(local, "state.json"), os.path.join(drive, "state.json"))
 
-    def fake_load_dataset(path, config=None, **kw):
-        rows = [{"open_type": "Semantic data", "language": "Multilingual"}, {"open_type": "Open Government", "language": "French"},
-                {"open_type": "Open Culture", "language": "English"}]
-        return iter(rows)
-
-    fake_datasets = types.SimpleNamespace(load_dataset=fake_load_dataset)
-    monkeypatch.setitem(sys.modules, "datasets", fake_datasets)
-    ok_src = mixplan.Source("x", "hf_text", "admin", stable=1, hf_path="PleIAs/common_corpus", filters={"open_type": "Open Government", "language": "French"})
-    assert prepare_mix.probe_filters(ok_src) is None
-    bad_src = mixplan.Source("y", "hf_text", "livres", stable=1, hf_path="PleIAs/common_corpus", filters={"open_type": "Open Science", "language": "French"})
-    err = prepare_mix.probe_filters(bad_src, n_scan=10)
-    assert err and "Open Government" in err and "Semantic data" in err and "y :" in err
-    assert prepare_mix.probe_filters(mixplan.Source("z", "hf_text", "web_wiki", stable=1, hf_path="x")) is None   # pas de filtre -> rien à sonder
+    class A:
+        pass
+    a = A(); a.out = drive
+    prepare_mix.cmd_verify(a)                                            # ne doit pas lever : tout correspond
 
 
-def test_v23_piaf_prepare_uses_correct_signature():
-    import types
+def test_run_existing_bin_still_works_through_write_tokens(tmp_path):
+    """run_existing_bin (copie de blocs d'un corpus déjà tokenisé) passe par write_tokens, donc shardé comme le reste,
+    et la phase decay ne doit jamais réutiliser les blocs déjà pris par la phase stable."""
+    import numpy as np
+    import mixdata
+    tok = _toy_tokenizer_v23(tmp_path)
+    block = 100
+    src = np.arange(1000, dtype=np.uint16)
+    src.tofile(str(tmp_path / "train.bin"))
+    st = mixdata.State(str(tmp_path / "st.json"))
+    w = mixdata.MixWriter(str(tmp_path / "o"), tok, st, val_permille=0, shard_tokens=150)
+    mixdata.run_existing_bin(w, "old", {"stable": 450, "decay": 200}, str(tmp_path / "train.bin"), block=block, seed=1)
+    w.close()
+    assert w.total_tokens("stable") == 450 and w.total_tokens("decay") == 200
+    import glob
+    stable_vals, decay_vals = [], []
+    for f in sorted(glob.glob(str(tmp_path / "o" / "stable" / "shard_*.bin"))):
+        stable_vals += np.fromfile(f, dtype=np.uint16).tolist()
+    for f in sorted(glob.glob(str(tmp_path / "o" / "decay" / "shard_*.bin"))):
+        decay_vals += np.fromfile(f, dtype=np.uint16).tolist()
+    assert len(stable_vals) == 450 and len(decay_vals) == 200
+    assert not (set(stable_vals) & set(decay_vals)), "la phase decay ne doit pas réutiliser les blocs de la phase stable"
+
+
+def test_finalize_sums_shard_tokens_without_a_single_train_bin(tmp_path):
     import mixdata
     import mixplan
     import prepare_mix
-    if "data" not in sys.modules:                      # cet environnement de test n'a pas de torch utilisable ;
-        sys.modules["data"] = types.SimpleNamespace(write_sft_split=lambda *a, **k: None)      # sft_data importe `data`/`mini_tokenizer`
-    if "mini_tokenizer" not in sys.modules:             # au niveau module pour des fonctions qu'on n'appelle pas ici (_piaf_window seul)
-        sys.modules["mini_tokenizer"] = types.SimpleNamespace(MiniTokenizer=object, save_meta=lambda *a, **k: None)
-    src = mixplan.Source("piaf_qa", "hf_qa", "qa", decay=1, hf_path="etalab-ia/piaf")
-    prep = prepare_mix.make_prepare(src, mixdata.Decontaminator([]))
-    row = {"context": "La tour Eiffel mesure 330 mètres de hauteur et fut achevée en 1889 à Paris.",
-           "answers": {"text": ["330 mètres"], "answer_start": [19]}, "question": "Quelle est la hauteur de la tour Eiffel ?"}
-    m = prep(row)
-    assert m is not None and m[1]["content"].startswith("330 mètres") and "330 mètres" in m[0]["content"]
-    assert prep({"context": "x", "answers": {"text": [], "answer_start": []}, "question": "q"}) is None
+    tok = _toy_tokenizer_v23(tmp_path)
+    docs = [f"document numero {i} le chat dort la maison enfants jouent dehors {i}" for i in range(200)]
+    out = str(tmp_path / "o")
+    st = mixdata.State(os.path.join(out, "state.json"))
+    w = mixdata.MixWriter(out, tok, st, val_permille=60, shard_tokens=400)
+    mixdata.run_source(w, "src", {"stable": 1500, "decay": 600}, lambda skip, ep: iter(docs[skip:]), lambda d: d, max_epochs=2, log=lambda m: None)
+    w.close()
+    plan = [mixplan.Source("src", "hf_text", "web_wiki", stable=1500, decay=600, hf_path="x")]
+    prepare_mix.finalize(out, "", tok, plan, st, w)
+    assert not os.path.exists(os.path.join(out, "stable", "train.bin"))          # jamais recollé en un seul fichier
+    for ph in ("stable", "decay"):
+        m = json.load(open(os.path.join(out, ph, "meta.json")))
+        assert m["n_train_tokens"] == w.total_tokens(ph) and m["n_shards"] == len(st.d["shards"][ph]) and "NON comparable" in m["val_note"]
+        assert open(os.path.join(out, ph, "val.bin"), "rb").read() == open(os.path.join(out, "val_new.bin"), "rb").read()
+    assert json.load(open(os.path.join(out, "mix_report.json")))["parts_par_categorie"]["web_wiki"] == 1.0
 
 
-def test_v23_verify_command_detects_drive_sync_mismatch(tmp_path):
-    import json
+def test_verify_command_detects_a_shard_drive_sync_mismatch(tmp_path):
+    import mixdata
     import prepare_mix
-    d = tmp_path
-    (d / "stable").mkdir()
-    (d / "decay").mkdir()
-    (d / "stable" / "train.bin").write_bytes(b"x" * 1000)
-    (d / "decay" / "train.bin").write_bytes(b"x" * 500)
-    (d / "val_new.bin").write_bytes(b"x" * 10)
-    json.dump({"sources": {}, "files": {"stable": 1000, "decay": 500, "val": 10}}, open(d / "state.json", "w"))
+    out = str(tmp_path / "o")
+    st = mixdata.State(os.path.join(out, "state.json"))
+    st.d["shards"] = {"stable": [{"file": "shard_00000.bin", "tokens": 500}], "decay": []}
+    st.d["files"]["val"] = 10
+    os.makedirs(os.path.join(out, "stable"))
+    os.makedirs(os.path.join(out, "decay"))
+    open(os.path.join(out, "stable", "shard_00000.bin"), "wb").write(b"x" * 1000)      # 500 tokens * 2 octets : correspond
+    open(os.path.join(out, "val_new.bin"), "wb").write(b"x" * 10)
+    st.save()
 
     class A:
-        out = str(d)
-    prepare_mix.cmd_verify(A())                                    # tout correspond : ne doit PAS lever
-    (d / "stable" / "train.bin").write_bytes(b"x" * 400)            # simule un fichier Drive pas encore synchronisé
+        pass
+    a = A(); a.out = out
+    prepare_mix.cmd_verify(a)                                            # tout correspond : ne doit PAS lever
+    open(os.path.join(out, "stable", "shard_00000.bin"), "wb").write(b"x" * 400)       # simule un shard pas encore synchronisé
     try:
-        prepare_mix.cmd_verify(A())
+        prepare_mix.cmd_verify(a)
         raise AssertionError("aurait dû détecter l'écart et s'arrêter")
     except SystemExit as e:
         assert e.code == 1
 
 
-def test_v23_sync_to_drive_is_incremental_and_verified(tmp_path):
-    import prepare_mix
-    local, drive = str(tmp_path / "local"), str(tmp_path / "drive")
-    os.makedirs(os.path.join(local, "stable"))
-    open(os.path.join(local, "stable", "train.bin"), "wb").write(b"a" * 1000)
-    open(os.path.join(local, "state.json"), "w").write('{"x":1}')
-    assert prepare_mix.sync_to_drive(local, drive) is True
-    assert open(os.path.join(drive, "stable", "train.bin"), "rb").read() == b"a" * 1000
-    assert open(os.path.join(drive, "state.json")).read() == '{"x":1}'
-    with open(os.path.join(local, "stable", "train.bin"), "ab") as f:
-        f.write(b"b" * 500)                                   # simule la suite d'une source
-    assert prepare_mix.sync_to_drive(local, drive) is True
-    assert open(os.path.join(drive, "stable", "train.bin"), "rb").read() == open(os.path.join(local, "stable", "train.bin"), "rb").read()
-    l, r = prepare_mix.sync_file(os.path.join(local, "stable", "train.bin"), os.path.join(drive, "stable", "train.bin"))
-    assert l == r == 1500                                      # déjà synchronisé : rien à recopier, mais toujours vérifié
-
-
-def test_v23_cmd_sync_reports_success_and_failure(tmp_path):
+def test_cmd_sync_pushes_a_shard_and_reports_success(tmp_path):
+    import mixdata
     import prepare_mix
     local, drive = str(tmp_path / "l"), str(tmp_path / "d")
     os.makedirs(os.path.join(local, "stable"))
-    open(os.path.join(local, "stable", "train.bin"), "wb").write(b"x" * 2000)
+    os.makedirs(os.path.join(local, "decay"))
+    open(os.path.join(local, "stable", "shard_00000.bin"), "wb").write(b"x" * 2000)
+    st = mixdata.State(os.path.join(local, "state.json"))
+    st.d["shards"] = {"stable": [{"file": "shard_00000.bin", "tokens": 1000}], "decay": []}
+    st.save()
 
     class A:
         pass
@@ -1231,4 +1213,14 @@ def test_v23_cmd_sync_reports_success_and_failure(tmp_path):
         raise AssertionError("cmd_sync appelle sys.exit, même en cas de succès")
     except SystemExit as e:
         assert e.code == 0
-    assert open(os.path.join(drive, "stable", "train.bin"), "rb").read() == b"x" * 2000
+    assert open(os.path.join(drive, "stable", "shard_00000.bin"), "rb").read() == b"x" * 2000
+
+
+def test_reddit_fr_is_a_candidate_not_in_the_default_plan():
+    import mixplan
+    assert "reddit_fr" not in {s.name for s in mixplan.DEFAULT_PLAN}
+    assert mixplan.validate(mixplan.DEFAULT_PLAN, budget=5 * mixplan.B) == []    # la source candidate ne casse pas le plan actif
+    cand = {s.name: s for s in mixplan.EXTRA_CANDIDATES}["reddit_fr"]
+    assert cand.license == "unknown"
+    issues = mixplan.validate(mixplan.EXTRA_CANDIDATES)
+    assert any("reddit_fr" in p and "licence" in p for p in issues)

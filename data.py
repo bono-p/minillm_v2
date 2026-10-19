@@ -19,9 +19,64 @@ from typing import Dict, Iterator, List, Tuple
 import numpy as np
 import torch
 
+import bisect
+import glob
+
+
+class ShardedMemmap:
+    """Concatène plusieurs fichiers `shard_NNNNN.bin` comme s'il s'agissait d'un seul tableau, sans jamais les recoller
+    en un fichier unique sur disque (voir `mixdata.py` : un gros `train.bin` sans cesse réécrit est le cas le plus
+    défavorable pour la synchronisation Google Drive entre deux sessions ; des shards fermés sont immuables).
+    Implémente juste ce qu'utilise `PretrainData` : `len()` et un découpage `[start:stop]`, y compris à cheval sur
+    deux shards (rare, seulement près d'une frontière de shard)."""
+
+    def __init__(self, paths: List[str], dtype):
+        assert paths, "aucun shard fourni"
+        self.arrays = [np.memmap(p, dtype=dtype, mode="r") for p in paths]
+        self.sizes = [len(a) for a in self.arrays]
+        self.offsets = [0]
+        for s in self.sizes:
+            self.offsets.append(self.offsets[-1] + s)
+        self.total = self.offsets[-1]
+
+    def __len__(self) -> int:
+        return self.total
+
+    def __getitem__(self, key: slice) -> np.ndarray:
+        start, stop = key.start, key.stop
+        if start is None:
+            start = 0
+        if stop is None:
+            stop = self.total
+        i = bisect.bisect_right(self.offsets, start) - 1
+        local_start = start - self.offsets[i]
+        if stop <= self.offsets[i + 1]:
+            return self.arrays[i][local_start:local_start + (stop - start)]
+        parts, remaining, idx, ls = [], stop - start, i, local_start
+        while remaining > 0:
+            avail = self.sizes[idx] - ls
+            take = min(avail, remaining)
+            parts.append(self.arrays[idx][ls:ls + take])
+            remaining -= take
+            idx += 1
+            ls = 0
+        return np.concatenate(parts)
+
+
+def _load_train_array(data_dir: str, dtype):
+    """`train.bin` unique (v2.1/v2.2, ou un corpus déjà fusionné) si présent ; sinon `shard_NNNNN.bin` triés (v2.3+)."""
+    direct = os.path.join(data_dir, "train.bin")
+    if os.path.exists(direct):
+        return np.memmap(direct, dtype=dtype, mode="r")
+    shards = sorted(glob.glob(os.path.join(data_dir, "shard_[0-9][0-9][0-9][0-9][0-9].bin")))
+    if not shards:
+        raise FileNotFoundError(f"ni train.bin ni shard_NNNNN.bin dans {data_dir}")
+    return np.memmap(shards[0], dtype=dtype, mode="r") if len(shards) == 1 else ShardedMemmap(shards, dtype)
+
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  Pré-entraînement : fichiers binaires plats (train.bin / val.bin / meta.json)
+#  Pré-entraînement : fichiers binaires plats (train.bin / val.bin / meta.json),
+#  ou train.bin remplacé par des shards shard_NNNNN.bin (voir _load_train_array)
 # ══════════════════════════════════════════════════════════════════════════════
 class PretrainData:
     def __init__(self, data_dir: str, seq_len: int, batch_size: int, seed: int = 1337,
@@ -29,7 +84,7 @@ class PretrainData:
         with open(os.path.join(data_dir, "meta.json"), encoding="utf-8") as f:
             self.meta: Dict = json.load(f)
         self.dtype = np.dtype(self.meta["dtype"])
-        self.train = np.memmap(os.path.join(data_dir, "train.bin"), dtype=self.dtype, mode="r")
+        self.train = _load_train_array(data_dir, self.dtype)
         self.val = np.memmap(os.path.join(data_dir, "val.bin"), dtype=self.dtype, mode="r")
         self.T, self.B, self.seed, self.rank, self.world = seq_len, batch_size, seed, rank, world
         self.n_blocks = len(self.train) // seq_len - 1
