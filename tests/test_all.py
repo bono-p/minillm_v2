@@ -1216,11 +1216,29 @@ def test_cmd_sync_pushes_a_shard_and_reports_success(tmp_path):
     assert open(os.path.join(drive, "stable", "shard_00000.bin"), "rb").read() == b"x" * 2000
 
 
-def test_reddit_fr_is_a_candidate_not_in_the_default_plan():
+def test_reddit_fr_is_in_the_default_plan():
     import mixplan
-    assert "reddit_fr" not in {s.name for s in mixplan.DEFAULT_PLAN}
-    assert mixplan.validate(mixplan.DEFAULT_PLAN, budget=5 * mixplan.B) == []    # la source candidate ne casse pas le plan actif
-    cand = {s.name: s for s in mixplan.EXTRA_CANDIDATES}["reddit_fr"]
-    assert cand.license == "unknown"
-    issues = mixplan.validate(mixplan.EXTRA_CANDIDATES)
-    assert any("reddit_fr" in p and "licence" in p for p in issues)
+    plan = {s.name: s for s in mixplan.DEFAULT_PLAN}
+    assert "reddit_fr" in plan and plan["reddit_fr"].kind == "hf_chat" and plan["reddit_fr"].decay > 0
+    assert mixplan.validate(mixplan.DEFAULT_PLAN, budget=5 * mixplan.B) == []
+    assert mixplan.EXTRA_CANDIDATES == []
+
+
+def test_wikipedia_target_is_2_billion_and_budget_is_preserved():
+    import mixplan
+    plan = {s.name: s for s in mixplan.DEFAULT_PLAN}
+    assert plan["wikipedia_fr"].total == 2 * mixplan.B
+    assert abs(sum(s.stable for s in mixplan.DEFAULT_PLAN) - 4.18 * mixplan.B) < 0.05 * mixplan.B
+    assert abs(sum(s.total for s in mixplan.DEFAULT_PLAN) - 5 * mixplan.B) < 0.02 * mixplan.B
+
+
+def test_probe_text_field_detects_wrong_column(monkeypatch):
+    import sys, types, mixplan, prepare_mix
+    rows = [{"turns": [{"from": "human", "value": "salut"}, {"from": "gpt", "value": "bonjour"}], "id": i} for i in range(5)]
+    fake = types.SimpleNamespace(load_dataset=lambda *a, **k: iter(rows))
+    monkeypatch.setitem(sys.modules, "datasets", fake)
+    src = mixplan.Source("x", "hf_chat", "conversations", decay=1, hf_path="a/b", text_field="conversations")
+    msg = prepare_mix.probe_text_field(src)
+    assert msg and "turns" in msg                      # liste les colonnes réellement vues
+    src.text_field = "turns"
+    assert prepare_mix.probe_text_field(src) is None

@@ -185,6 +185,35 @@ def probe_filters(src: mixplan.Source, n_scan: int = 400) -> Optional[str]:
     return f"{src.name} : aucune des {n_scan} premières lignes ne correspond au filtre ({details})"
 
 
+def probe_text_field(src: mixplan.Source, n_scan: int = 50) -> Optional[str]:
+    """Avant de consommer le moindre quota : vérifie que la colonne `text_field` existe et donne du contenu exploitable
+    (texte pour hf_text, conversations lisibles pour hf_chat) sur les `n_scan` premières lignes. Sinon, renvoie un message
+    qui liste les colonnes RÉELLEMENT présentes (utile pour reddit_fr / FrancophonIA/LELU, dont le nom de colonne n'a pas
+    pu être vérifié hors ligne)."""
+    if src.kind not in ("hf_text", "hf_chat"):
+        return None
+    from datasets import load_dataset
+    kw = {"streaming": True, "split": "train"}
+    if src.hf_data_files:
+        kw["data_files"] = src.hf_data_files
+    ds = load_dataset(src.hf_path, src.hf_config or None, **kw)
+    cols, usable = set(), 0
+    for i, row in enumerate(ds):
+        if i >= n_scan:
+            break
+        if isinstance(row, dict):
+            cols.update(row.keys())
+            v = row.get(src.text_field)
+            if src.kind == "hf_text" and isinstance(v, str) and v.strip():
+                usable += 1
+            elif src.kind == "hf_chat" and to_messages(v):
+                usable += 1
+    if usable:
+        return None
+    return (f"{src.name} : la colonne « {src.text_field} » ne donne aucun contenu exploitable sur les {n_scan} premières lignes "
+            f"(colonnes vues : {sorted(cols)[:12]}) -> corrige text_field dans mixplan.py")
+
+
 def sync_file(local_path: str, remote_path: str) -> Tuple[int, int]:
     """Copie vers `remote_path` uniquement les octets de `local_path` qui n'y sont pas encore (reprise par la taille),
     puis fsync. Jamais de retour en arrière : si `remote_path` est déjà plus gros, on ne touche à rien (sécurité)."""
@@ -272,7 +301,7 @@ def cmd_build(a) -> None:
         sys.exit("Licence non compatible : corrige le plan (ou --allow_nc pour une variante de recherche NON publiée).")
     if not a.skip_probe:
         print("\nVérification des filtres avant de commencer (évite de découvrir une source vide après des heures) :")
-        probe_errors = [e for e in (probe_filters(s) for s in plan) if e]
+        probe_errors = [e for e in [probe_filters(s) for s in plan] + [probe_text_field(s) for s in plan] if e]
         for e in probe_errors:
             print("❌ ", e)
         if probe_errors:

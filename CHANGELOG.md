@@ -1,5 +1,13 @@
 # Changelog — MiniLLM v2 (refonte après audit)
 
+## Plan v2.3 : Wikipédia 2 Md + Reddit FR (20/10/2026)
+
+* **`wikipedia_fr` : 1,2 -> 2,0 Md** (1,8 stable + 0,2 decay). Le dump FR ne contient qu'environ 0,95 à 1,3 Md de tokens : la source est donc répétée ≈ 1,5 à 2,1 fois (sous le plafond `max_epochs` = 3).
+* **`fineweb2_fr` : 3,24 -> 2,39 Md** (2,14 stable + 0,25 decay) pour garder un budget total de 5 Md.
+* **`reddit_fr` (`FrancophonIA/LELU`) passe dans `DEFAULT_PLAN`** (50 M tokens en phase decay, avec les autres conversations) ; `EXTRA_CANDIDATES` est vidé. Licence de réutilisation du contenu Reddit **non confirmée**, passée à `permissive` sur décision de l'utilisateur.
+* **Nouvelle sonde `probe_text_field`** (lancée avant toute construction, comme `probe_filters`) : vérifie que la colonne `text_field` donne du contenu exploitable ; sinon elle s'arrête et liste les colonnes réellement présentes. Utile pour LELU, dont le nom de colonne et le format des tours (rôles) n'ont pas pu être vérifiés hors ligne.
+* Nouvelles parts : web/wiki ≈ 88 %, conversations ≈ 10 %, livres ≈ 1,8 %.
+
 ## Shards (12/10/2026) : fini le `train.bin` unique
 
 * **`mixdata.MixWriter`** écrit désormais des shards plafonnés (`--shard_tokens`, 100 M par défaut ≈ 200 Mo) au lieu d'un `train.bin` unique sans cesse réécrit — le décalage de synchronisation Drive persistait même avec `--local`/`sync` pour un fichier de plusieurs Go en écriture continue ; un shard fermé est petit et immuable.

@@ -126,10 +126,13 @@ cesse réécrit par des centaines d'appends, reste le cas le plus défavorable p
 - `prepare_mix.py verify`, `sync`, `status` et `finalize()` sont tous adaptés aux shards (voir `state.json["shards"]`).
 - Rétrocompatible : un dossier avec un `train.bin` classique (v2.1/v2.2) continue de fonctionner sans changement.
 
-## 13. Conversations Reddit FR — licence non tranchée
+## 13. Conversations Reddit FR et Wikipédia 2 Md (mise à jour du 20/10/2026)
 
-Ajoutée comme CANDIDATE (`mixplan.EXTRA_CANDIDATES`, pas dans `DEFAULT_PLAN`) : `FrancophonIA/LELU` (556 621
-conversations, 1,58 M tours de parole, Reddit FR). Licence de réutilisation non confirmée (contenu Reddit réexporté via
-BigQuery/Kaggle) et nom exact de la colonne « conversations » non vérifié. `validate()` la signale tant que ce n'est
-pas tranché ; elle n'affecte jamais `build` sans un `--only reddit_fr` explicite. Vérifier d'abord avec `prepare_mix.py
-tree --repo FrancophonIA/LELU` et `inspect`, puis décider.
+`reddit_fr` (`FrancophonIA/LELU`, 556 621 conversations, 1,58 M tours de parole, Reddit FR) est désormais dans
+`DEFAULT_PLAN` (50 M tokens, phase decay). Licence de réutilisation non confirmée (contenu Reddit réexporté via
+BigQuery/Kaggle) : choix assumé par l'utilisateur, à garder en tête avant toute publication des poids. La colonne
+`conversations` et le format des tours n'ont pas été vérifiés hors ligne ; `probe_text_field` s'en charge au début de
+`build` (arrêt propre avec la liste des colonnes vues si ça ne correspond pas).
+
+`wikipedia_fr` passe à 2,0 Md (1,8 stable + 0,2 decay), pris sur `fineweb2_fr` (2,39 Md). Le dump contient ≈ 0,95 à 1,3 Md
+de tokens, donc ≈ 1,5 à 2,1 passes.

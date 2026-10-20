@@ -61,10 +61,10 @@ class Source:
 
 # ── plan par défaut : 5,00 milliards de tokens = 4,25 (stable) + 0,75 (decay) ─────────────────────────────────────────────────────
 DEFAULT_PLAN: List[Source] = [
-    Source("wikipedia_fr", "hf_text", "web_wiki", stable=int(1.00 * B), decay=int(0.20 * B), hf_path="wikimedia/wikipedia", hf_config="20231101.fr",
+    Source("wikipedia_fr", "hf_text", "web_wiki", stable=int(1.80 * B), decay=int(0.20 * B), hf_path="wikimedia/wikipedia", hf_config="20231101.fr",
            clean="wiki", est_available_tokens=int(1.3 * B), license="permissive",
-           note="Wikipédia FR (CC BY-SA), mêmes nettoyages que la v2.2 ; relevé le 11/10/2026 : 0,95 Md obtenus sans aucune répétition -> augmenté"),
-    Source("fineweb2_fr", "hf_text", "web_wiki", stable=int(2.94 * B), decay=int(0.30 * B), hf_path="HuggingFaceFW/fineweb-2", hf_config="fra_Latn",
+           note="Wikipédia FR (CC BY-SA), mêmes nettoyages que la v2.2 ; 2,0 Md visés le 20/10/2026 (décision de l'utilisateur) : le dump ne contient qu'environ 0,95 à 1,3 Md de tokens, donc la source est répétée ≈ 1,5 à 2,1 fois"),
+    Source("fineweb2_fr", "hf_text", "web_wiki", stable=int(2.14 * B), decay=int(0.25 * B), hf_path="HuggingFaceFW/fineweb-2", hf_config="fra_Latn",
            clean="web", est_available_tokens=int(50 * B),
            note="web français filtré (FineWeb-2, ODC-By) ; reçoit l'essentiel du budget libéré par Common Corpus (source quasi inépuisable, 0 répétition relevée)"),
     # Les 4 sources Common Corpus ci-dessous sont PLAFONNÉES à ce qui a été réellement obtenu le 11/10/2026 (en butant sur
@@ -89,6 +89,10 @@ DEFAULT_PLAN: List[Source] = [
     Source("french_instruction_vonewman", "hf_chat", "conversations", stable=int(0.05 * B), decay=int(0.10 * B),
            hf_path="vonewman/french-instruction-dataset", text_field="conversations", est_available_tokens=int(45 * M), max_epochs=7.0,
            note="Apache-2.0, 108 991 conversations (≈ 45 M tokens : estimation d'après la taille du fichier)"),
+    Source("reddit_fr", "hf_chat", "conversations", decay=int(0.05 * B), hf_path="FrancophonIA/LELU",
+           text_field="conversations", est_available_tokens=int(60 * M), max_epochs=5.0, license="permissive",
+           note="conversations Reddit FR (LELU). Ajoutée au plan le 20/10/2026 sur décision de l'utilisateur ; la licence de réutilisation du contenu Reddit "
+                "n'est PAS confirmée (passée à « permissive » en connaissance de cause) ; nom de colonne vérifié automatiquement avant la construction"),
     Source("piaf_qa", "hf_qa", "qa", decay=2_000_000, hf_path="etalab-ia/piaf", max_epochs=6.0, est_available_tokens=700_000,
            note="questions-réponses sur Wikipédia (même source que le SFT) ; très petit (~700 k tokens/époque), répété jusqu'à 6 fois. "
                 "Corrige un bug du 11/10/2026 : prepare_mix.py appelait _piaf_window() avec le mauvais signature -> 100% des lignes rejetées"),
@@ -102,11 +106,7 @@ DEFAULT_PLAN: List[Source] = [
 # conversations groupées (à vérifier avec `prepare_mix.py tree --repo FrancophonIA/LELU` et `inspect`). `license="unknown"`
 # fait que `validate()` la signale et que `build` refuse de la traiter tant qu'elle n'est pas explicitement ajoutée au
 # plan ET que la licence n'est pas tranchée (en repassant `license="permissive"` ici, en connaissance de cause).
-EXTRA_CANDIDATES: List[Source] = [
-    Source("reddit_fr", "hf_chat", "conversations", decay=int(0.05 * B), hf_path="FrancophonIA/LELU",
-           text_field="conversations", est_available_tokens=int(60 * M), max_epochs=5.0, license="unknown",
-           note="conversations Reddit FR nettoyées ; licence ET nom de colonne à vérifier avant tout usage"),
-]
+EXTRA_CANDIDATES: List[Source] = []        # reddit_fr est passée dans DEFAULT_PLAN le 20/10/2026
 
 # Sources interdites par défaut (licence non commerciale) : listées pour mémoire, jamais dans le plan par défaut.
 EXCLUDED_NC = {
