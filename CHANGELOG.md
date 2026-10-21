@@ -1,5 +1,9 @@
 # Changelog — MiniLLM v2 (refonte après audit)
 
+## Pré-entraînement v2.3 : paramètre EPOCHS (21/10/2026)
+
+* `Pretrain_v23.ipynb` : nouveau réglage `EPOCHS` (2 par défaut, sur demande de l'utilisateur) ; `N_ITERS = EPOCHS × tokens / tokens_par_itération`. Avec 2 époques : 145 481 itérations, décroissance à l'itération 128 023 (stable ≈ 2,01 passes, decay ≈ 1,95 passe), ≈ 9,53 Md de tokens vus. Les sources déjà répétées à la construction (french_instruct ×7, vonewman ×8, Wikipédia ×1) le seront donc encore davantage.
+
 ## Pré-entraînement v2.3 : réglages adaptés aux données réellement construites (21/10/2026)
 
 * `Pretrain_v23.ipynb` : `DECAY_FRAC` 0,15 -> **0,12** (la phase decay ne contient que ~0,59 Md de tokens, pas 0,75 Md : avec 0,15 elle aurait été répétée ~1,22 fois et ~130 M de tokens de stable seraient restés inutilisés) ; nouveau contrôle de consommation de la phase decay ; note sur `val.bin` corrigée (non comparable à la v2.2).
