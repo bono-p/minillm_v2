@@ -35,7 +35,7 @@ M = 1_000_000
 @dataclass
 class Source:
     name: str
-    kind: str                       # "existing_bin" | "hf_text" | "hf_chat" | "hf_qa"
+    kind: str                       # "existing_bin" | "hf_text" | "hf_chat" | "hf_qa" | "xml_chat" (fichier XML <dialog><s><utt>, ex. LELU)
     category: str                   # web_wiki | livres | openweb | science | admin | presse | conversations | qa
     stable: int = 0                 # tokens visés en phase STABLE
     decay: int = 0                  # tokens visés en phase DECAY
@@ -89,10 +89,10 @@ DEFAULT_PLAN: List[Source] = [
     Source("french_instruction_vonewman", "hf_chat", "conversations", stable=int(0.05 * B), decay=int(0.10 * B),
            hf_path="vonewman/french-instruction-dataset", text_field="conversations", est_available_tokens=int(45 * M), max_epochs=7.0,
            note="Apache-2.0, 108 991 conversations (≈ 45 M tokens : estimation d'après la taille du fichier)"),
-    Source("reddit_fr", "hf_chat", "conversations", decay=int(0.05 * B), hf_path="FrancophonIA/LELU",
+    Source("reddit_fr", "xml_chat", "conversations", decay=int(0.05 * B), hf_path="FrancophonIA/LELU", hf_data_files="train.xml",
            text_field="conversations", est_available_tokens=int(60 * M), max_epochs=5.0, license="permissive",
            note="conversations Reddit FR (LELU). Ajoutée au plan le 20/10/2026 sur décision de l'utilisateur ; la licence de réutilisation du contenu Reddit "
-                "n'est PAS confirmée (passée à « permissive » en connaissance de cause) ; nom de colonne vérifié automatiquement avant la construction"),
+                "n'est PAS confirmée (passée à « permissive » en connaissance de cause) ; dépôt au format XML (lecteur dédié, kind « xml_chat ») ; lecture vérifiée automatiquement avant la construction"),
     Source("piaf_qa", "hf_qa", "qa", decay=2_000_000, hf_path="etalab-ia/piaf", max_epochs=6.0, est_available_tokens=700_000,
            note="questions-réponses sur Wikipédia (même source que le SFT) ; très petit (~700 k tokens/époque), répété jusqu'à 6 fois. "
                 "Corrige un bug du 11/10/2026 : prepare_mix.py appelait _piaf_window() avec le mauvais signature -> 100% des lignes rejetées"),

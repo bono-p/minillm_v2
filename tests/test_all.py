@@ -1219,7 +1219,7 @@ def test_cmd_sync_pushes_a_shard_and_reports_success(tmp_path):
 def test_reddit_fr_is_in_the_default_plan():
     import mixplan
     plan = {s.name: s for s in mixplan.DEFAULT_PLAN}
-    assert "reddit_fr" in plan and plan["reddit_fr"].kind == "hf_chat" and plan["reddit_fr"].decay > 0
+    assert "reddit_fr" in plan and plan["reddit_fr"].kind == "xml_chat" and plan["reddit_fr"].decay > 0
     assert mixplan.validate(mixplan.DEFAULT_PLAN, budget=5 * mixplan.B) == []
     assert mixplan.EXTRA_CANDIDATES == []
 
@@ -1242,3 +1242,36 @@ def test_probe_text_field_detects_wrong_column(monkeypatch):
     assert msg and "turns" in msg                      # liste les colonnes réellement vues
     src.text_field = "turns"
     assert prepare_mix.probe_text_field(src) is None
+
+
+def test_parse_lelu_xml_alternates_roles_and_drops_broken_chains(tmp_path):
+    import prepare_mix
+    xml = """<?xml version="1.0"?>
+<dialog>
+<!-- <statistics conversations="4"/> -->
+    <s link_id="a"><utt uid="1" comment_id="c1" parent_id="a">Ironie : l'article dit 2 pages, en fait 6 !</utt>
+        <utt uid="2" comment_id="c2" parent_id="c1">Moi-même, j'ai dû me forcer pour arriver jusqu'à la fin.</utt></s>
+    <s link_id="b"><utt uid="1">Premier</utt><utt uid="2">Deuxième</utt><utt uid="3">Troisième seul</utt></s>
+    <s link_id="c"><utt uid="1">Salut</utt><utt uid="2">[deleted]</utt></s>
+    <s link_id="d"><utt uid="1">Seul</utt></s>
+</dialog>"""
+    p = tmp_path / "train.xml"
+    p.write_text(xml, encoding="utf-8")
+    out = prepare_mix.parse_lelu_xml(str(p))
+    assert len(out) == 2                                         # c (message supprimé) et d (un seul tour) écartées
+    assert [m["from"] for m in out[0]] == ["human", "gpt"]
+    assert [m["from"] for m in out[1]] == ["human", "gpt"] and out[1][-1]["value"] == "Deuxième"   # tour final seul retiré
+    from mixdata import to_messages
+    assert all(to_messages(d) for d in out)
+
+
+def test_reddit_source_is_xml_chat_and_stream_is_deterministic(monkeypatch):
+    import mixplan, prepare_mix
+    src = next(s for s in mixplan.DEFAULT_PLAN if s.name == "reddit_fr")
+    assert src.kind == "xml_chat" and src.hf_data_files == "train.xml"
+    fake = [[{"from": "human", "value": f"q{i}"}, {"from": "gpt", "value": f"r{i}"}] for i in range(20)]
+    monkeypatch.setattr(prepare_mix, "xml_dialogs", lambda s: fake)
+    a = [r["conversations"][0]["value"] for r in prepare_mix.hf_stream(src, 0, 0)]
+    b = [r["conversations"][0]["value"] for r in prepare_mix.hf_stream(src, 0, 0)]
+    c = [r["conversations"][0]["value"] for r in prepare_mix.hf_stream(src, 5, 0)]
+    assert a == b and c == a[5:] and len(a) == 20 and a != [f"q{i}" for i in range(20)]

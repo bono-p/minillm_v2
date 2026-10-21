@@ -29,7 +29,48 @@ from mixdata import (Decontaminator, MixWriter, State, chat_ok, clean_ocr, eval_
 
 
 # ── adaptateurs Hugging Face (réseau : NON testés hors ligne) ─────────────────────────────────────────────────────────────────────
+_BAD_UTT = ("[deleted]", "[removed]")
+_XML_CACHE: Dict[str, list] = {}
+
+
+def parse_lelu_xml(path: str) -> list:
+    """Lit un fichier XML de type LELU (<dialog><s><utt>…</utt></s></dialog>) et renvoie une liste de conversations
+    [{"from": "human"|"gpt", "value": texte}, …]. Les tours Reddit s'enchaînent en chaîne (chaque réponse répond à la précédente) :
+    on alterne donc « human » (1er message) / « gpt » (réponse), et on retire le dernier tour s'il reste seul (pour finir sur une réponse).
+    Une conversation contenant un message supprimé/vide est écartée entière (la chaîne serait cassée)."""
+    import xml.etree.ElementTree as ET
+    out: list = []
+    for _, elem in ET.iterparse(path, events=("end",)):
+        if elem.tag != "s":
+            continue
+        texts = [(u.text or "").strip() for u in elem.iter("utt")]
+        elem.clear()
+        if len(texts) < 2 or any((not t) or t in _BAD_UTT for t in texts):
+            continue
+        if len(texts) % 2:
+            texts = texts[:-1]
+        out.append([{"from": "human" if i % 2 == 0 else "gpt", "value": t} for i, t in enumerate(texts)])
+    return out
+
+
+def xml_dialogs(src: mixplan.Source) -> list:
+    """Télécharge (une seule fois, cache Hugging Face) puis lit le fichier XML de la source ; résultat gardé en mémoire (~0,6 Go)."""
+    from huggingface_hub import hf_hub_download
+    fname = src.hf_data_files or "train.xml"
+    key = f"{src.hf_path}/{fname}"
+    if key not in _XML_CACHE:
+        _XML_CACHE[key] = parse_lelu_xml(hf_hub_download(src.hf_path, fname, repo_type="dataset"))
+    return _XML_CACHE[key]
+
+
 def hf_stream(src: mixplan.Source, skip: int, epoch: int) -> Iterator[dict]:
+    if src.kind == "xml_chat":
+        import random
+        dialogs = list(xml_dialogs(src))
+        random.Random(1234 + epoch).shuffle(dialogs)                  # déterministe : la reprise saute exactement les mêmes conversations
+        for d in dialogs[skip:]:
+            yield {src.text_field: d}
+        return
     from datasets import load_dataset
     kw = {"streaming": True, "split": "train"}
     if src.hf_data_files:
@@ -61,7 +102,7 @@ def make_prepare(src: mixplan.Source, deco: Decontaminator):
             t = clean_ocr(t, kind) if src.clean else t
             return t if quality_ok(t, kind) else None
         return prep
-    if src.kind == "hf_chat":
+    if src.kind in ("hf_chat", "xml_chat"):
         def prep(row):
             m = to_messages(row.get(src.text_field))
             return m if m and chat_ok(m) and not deco.contaminated(m) else None
@@ -123,8 +164,8 @@ def cmd_inspect(a) -> None:
     from datasets import load_dataset
     seen = set()
     for src in mixplan.DEFAULT_PLAN:
-        if not src.hf_path or (src.hf_path, src.hf_data_files) in seen:
-            continue
+        if not src.hf_path or src.kind == "xml_chat" or (src.hf_path, src.hf_data_files) in seen:
+            continue                                                # (xml_chat : lu par un lecteur dédié, pas par load_dataset)
         seen.add((src.hf_path, src.hf_data_files))
         if src.hf_path == "PleIAs/common_corpus" and not src.hf_data_files and not a.all:
             print("=" * 80, f"\n{src.hf_path} : ignoré (dépôt énorme : load_dataset met très longtemps à résoudre ses fichiers).",
@@ -190,6 +231,12 @@ def probe_text_field(src: mixplan.Source, n_scan: int = 50) -> Optional[str]:
     (texte pour hf_text, conversations lisibles pour hf_chat) sur les `n_scan` premières lignes. Sinon, renvoie un message
     qui liste les colonnes RÉELLEMENT présentes (utile pour reddit_fr / FrancophonIA/LELU, dont le nom de colonne n'a pas
     pu être vérifié hors ligne)."""
+    if src.kind == "xml_chat":
+        try:
+            ok = sum(1 for d in xml_dialogs(src)[:n_scan] if to_messages(d))
+        except Exception as e:                                       # noqa: BLE001
+            return f"{src.name} : lecture du fichier XML impossible ({type(e).__name__}: {e})"
+        return None if ok else f"{src.name} : aucune des {n_scan} premières conversations XML n'est exploitable"
     if src.kind not in ("hf_text", "hf_chat"):
         return None
     from datasets import load_dataset
@@ -212,6 +259,14 @@ def probe_text_field(src: mixplan.Source, n_scan: int = 50) -> Optional[str]:
         return None
     return (f"{src.name} : la colonne « {src.text_field} » ne donne aucun contenu exploitable sur les {n_scan} premières lignes "
             f"(colonnes vues : {sorted(cols)[:12]}) -> corrige text_field dans mixplan.py")
+
+
+def _safe(probe, src: mixplan.Source) -> Optional[str]:
+    """Une sonde qui plante (dépôt illisible, réseau…) doit donner un message clair, pas un traceback au milieu du build."""
+    try:
+        return probe(src)
+    except Exception as e:                                          # noqa: BLE001
+        return f"{src.name} : sonde « {probe.__name__} » impossible ({type(e).__name__}: {str(e)[:200]})"
 
 
 def sync_file(local_path: str, remote_path: str) -> Tuple[int, int]:
@@ -301,7 +356,7 @@ def cmd_build(a) -> None:
         sys.exit("Licence non compatible : corrige le plan (ou --allow_nc pour une variante de recherche NON publiée).")
     if not a.skip_probe:
         print("\nVérification des filtres avant de commencer (évite de découvrir une source vide après des heures) :")
-        probe_errors = [e for e in [probe_filters(s) for s in plan] + [probe_text_field(s) for s in plan] if e]
+        probe_errors = [e for e in [_safe(probe_filters, s) for s in plan] + [_safe(probe_text_field, s) for s in plan] if e]
         for e in probe_errors:
             print("❌ ", e)
         if probe_errors:
