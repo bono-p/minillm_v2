@@ -1,5 +1,10 @@
 # Changelog — MiniLLM v2 (refonte après audit)
 
+## Pré-entraînement v2.3 : réglages adaptés aux données réellement construites (21/10/2026)
+
+* `Pretrain_v23.ipynb` : `DECAY_FRAC` 0,15 -> **0,12** (la phase decay ne contient que ~0,59 Md de tokens, pas 0,75 Md : avec 0,15 elle aurait été répétée ~1,22 fois et ~130 M de tokens de stable seraient restés inutilisés) ; nouveau contrôle de consommation de la phase decay ; note sur `val.bin` corrigée (non comparable à la v2.2).
+* `mix_report.json` : `parts_par_categorie` couvre désormais tout le plan, même après un `build --only …`.
+
 ## Plan v2.3 : Wikipédia 2 Md + Reddit FR (20/10/2026)
 
 * **`wikipedia_fr` : 1,2 -> 2,0 Md** (1,8 stable + 0,2 decay). Le dump FR ne contient qu'environ 0,95 à 1,3 Md de tokens : la source est donc répétée ≈ 1,5 à 2,1 fois (sous le plafond `max_epochs` = 3).

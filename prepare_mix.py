@@ -441,7 +441,7 @@ def finalize(out: str, existing: str, tok, plan: List[mixplan.Source], st: State
         json.dump(meta, open(os.path.join(d, "meta.json"), "w"), indent=1)
     tot = sum(s["tokens"]["stable"] + s["tokens"]["decay"] for s in st.d["sources"].values()) or 1
     by_cat: Dict[str, int] = {}
-    for s in plan:
+    for s in {x.name: x for x in list(mixplan.DEFAULT_PLAN) + list(plan)}.values():      # tout le plan, même après un build --only
         if s.name in st.d["sources"]:
             x = st.d["sources"][s.name]
             by_cat[s.category] = by_cat.get(s.category, 0) + x["tokens"]["stable"] + x["tokens"]["decay"]
