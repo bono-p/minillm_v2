@@ -23,6 +23,8 @@ import shutil
 import sys
 from typing import Callable, Dict, Iterator, List, Optional, Tuple
 
+import re
+
 import mixplan
 from mixdata import (Decontaminator, MixWriter, State, chat_ok, clean_ocr, eval_questions, quality_ok, run_existing_bin, run_source, shard_name,
                      to_messages)
@@ -33,18 +35,28 @@ _BAD_UTT = ("[deleted]", "[removed]")
 _XML_CACHE: Dict[str, list] = {}
 
 
+_CTRL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+_S_RE = re.compile(r"<s\s[^>]*>(.*?)</s>", re.S)
+_UTT_RE = re.compile(r"<utt\b[^>]*>(.*?)</utt>", re.S)
+
+
 def parse_lelu_xml(path: str) -> list:
     """Lit un fichier XML de type LELU (<dialog><s><utt>…</utt></s></dialog>) et renvoie une liste de conversations
-    [{"from": "human"|"gpt", "value": texte}, …]. Les tours Reddit s'enchaînent en chaîne (chaque réponse répond à la précédente) :
-    on alterne donc « human » (1er message) / « gpt » (réponse), et on retire le dernier tour s'il reste seul (pour finir sur une réponse).
-    Une conversation contenant un message supprimé/vide est écartée entière (la chaîne serait cassée)."""
-    import xml.etree.ElementTree as ET
+    [{"from": "human"|"gpt", "value": texte}, …].
+
+    Lecture TOLÉRANTE (expressions régulières, pas un parseur XML strict) : le fichier réel contient des caractères invalides
+    (esperluettes non échappées, caractères de contrôle…) qui faisaient échouer ElementTree (« not well-formed »). Les entités
+    (&amp; &quot; &#39;…) sont décodées avec html.unescape, les caractères de contrôle supprimés.
+
+    Les tours Reddit s'enchaînent en chaîne (chaque réponse répond à la précédente) : on alterne « human » (1er message) / « gpt »
+    (réponse), et on retire le dernier tour s'il reste seul (pour finir sur une réponse). Une conversation contenant un message
+    supprimé/vide est écartée entière (la chaîne serait cassée)."""
+    import html
+    with open(path, encoding="utf-8", errors="replace") as f:
+        data = f.read()
     out: list = []
-    for _, elem in ET.iterparse(path, events=("end",)):
-        if elem.tag != "s":
-            continue
-        texts = [(u.text or "").strip() for u in elem.iter("utt")]
-        elem.clear()
+    for m in _S_RE.finditer(data):
+        texts = [html.unescape(_CTRL.sub("", t)).strip() for t in _UTT_RE.findall(m.group(1))]
         if len(texts) < 2 or any((not t) or t in _BAD_UTT for t in texts):
             continue
         if len(texts) % 2:

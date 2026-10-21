@@ -1275,3 +1275,18 @@ def test_reddit_source_is_xml_chat_and_stream_is_deterministic(monkeypatch):
     b = [r["conversations"][0]["value"] for r in prepare_mix.hf_stream(src, 0, 0)]
     c = [r["conversations"][0]["value"] for r in prepare_mix.hf_stream(src, 5, 0)]
     assert a == b and c == a[5:] and len(a) == 20 and a != [f"q{i}" for i in range(20)]
+
+
+def test_parse_lelu_xml_tolerates_malformed_content(tmp_path):
+    import prepare_mix
+    raw = ("<?xml version=\"1.0\"?>\n<dialog>\n"
+           "<s link_id=\"a\"><utt uid=\"1\">Tom & Jerry <3 ça marche\x0b bien</utt>"
+           "<utt uid=\"2\">R&amp;D &quot;ok&quot; &#39;oui&#39; a < b</utt></s>\n"
+           "<s link_id=\"b\"><utt uid=\"1\">ligne1\nligne2</utt><utt uid=\"2\">réponse</utt></s>\n</dialog>")
+    p = tmp_path / "train.xml"
+    p.write_text(raw, encoding="utf-8")
+    out = prepare_mix.parse_lelu_xml(str(p))                      # ElementTree lèverait ParseError sur ce fichier
+    assert len(out) == 2
+    assert out[0][0]["value"] == "Tom & Jerry <3 ça marche bien"       # & brut et < bruts conservés, caractère de contrôle supprimé
+    assert out[0][1]["value"] == "R&D \"ok\" 'oui' a < b"
+    assert out[1][0]["value"] == "ligne1\nligne2"
